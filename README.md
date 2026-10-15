@@ -120,7 +120,7 @@ https://line-group-assistant.<你的帳號>.workers.dev/webhook
 | `/translate off`、`/translate on` | 關閉／開啟本群組的自動翻譯，關閉時 `/t` 仍可用；狀態存在試算表的 `translate` 分頁 |
 | `/translate` | 顯示自動翻譯目前是開啟或關閉 |
 | `/task` | 列出未完成的任務（同 `/task list`） |
-| `/task add <內容> [owner:名字] [due:10/20]` | 新增任務，未指定負責人時預設為發言者 |
+| `/task add <內容> [@名字] [10/20]` | 新增任務，例：`/task add 買早餐 @JOJO 10/17`。`@名字`（或 `owner:名字`）指定負責人，未指定時預設為發言者；結尾的日期（`10/17`、`10-17`、`2026/10/17`，或 `due:10/17`）當作期限 |
 | `/task start <編號>` | 標記為進行中 |
 | `/task done <編號>` | 標記為完成 |
 | `/task assign <編號> <名字>` | 更換負責人 |

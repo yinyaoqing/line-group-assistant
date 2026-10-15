@@ -6,7 +6,7 @@ import type { Row } from "../../storage/types";
  * Task & progress tracking, stored in the "tasks" table (a sheet tab).
  *
  *   /task                                   list open tasks
- *   /task add <title> [owner:name] [due:10/20]
+ *   /task add <title> [@name|owner:name] [10/20|due:10/20]
  *   /task start <id>
  *   /task done <id>
  *   /task assign <id> <name>
@@ -45,7 +45,7 @@ export const tasks: Plugin = {
       }
       case "add": {
         const { title, owner, due } = parseAdd(restArgs.join(" "));
-        if (!title) return [text("用法 Usage: /task add <內容 title> [owner:名字 name] [due:10/20]")];
+        if (!title) return [text("用法 Usage: /task add <內容> @負責人 期限\n例 e.g. /task add 買早餐 @JOJO 10/17\n負責人、期限可省略 Owner and due date are optional")];
         const by = (await ctx.displayName(input.userId)) ?? "";
         const row = await db.append(TABLE, {
           title,
@@ -93,14 +93,22 @@ function fmt(r: Row): string {
   return parts.join(" ");
 }
 
-/** Pull "owner:name" and "due:10/20" out of free text. */
+/** A trailing date such as 10/20, 10-20 or 2026/10/20 is taken as the due date. */
+const TRAILING_DATE = /\s+((?:\d{4}[/-])?\d{1,2}[/-]\d{1,2})$/;
+
+/**
+ * Pull the owner ("owner:name" or "@name") and due date ("due:10/20" or a
+ * trailing date) out of free text; the rest is the title.
+ */
 export function parseAdd(s: string): { title: string; owner?: string; due?: string } {
   let owner: string | undefined;
   let due: string | undefined;
-  const title = s
+  let title = s
     .replace(/owner[:：]\s*(\S+)/i, (_, v: string) => ((owner = v), ""))
     .replace(/due[:：]\s*(\S+)/i, (_, v: string) => ((due = v), ""))
+    .replace(/(?:^|\s)[@＠](\S+)/, (_, v: string) => ((owner ??= v), ""))
     .replace(/\s+/g, " ")
     .trim();
+  if (!due) title = title.replace(TRAILING_DATE, (_, v: string) => ((due = v.replace(/-/g, "/")), "")).trim();
   return { title, owner, due };
 }

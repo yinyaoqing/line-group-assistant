@@ -144,6 +144,16 @@ describe("tasks plugin", () => {
     expect(parseAdd("載木料 owner:Zace due:10/20")).toEqual({ title: "載木料", owner: "Zace", due: "10/20" });
   });
 
+  it.each([
+    ["買早餐 @JOJO 10/17", { title: "買早餐", owner: "JOJO", due: "10/17" }],
+    ["@JOJO 買早餐", { title: "買早餐", owner: "JOJO", due: undefined }],
+    ["買早餐 10-17", { title: "買早餐", owner: undefined, due: "10/17" }],
+    ["買早餐 2026/10/17", { title: "買早餐", owner: undefined, due: "2026/10/17" }],
+    ["寄信給 a@b.com", { title: "寄信給 a@b.com", owner: undefined, due: undefined }],
+    ["買 2x4 木料 10/17 送到 5/6 號", { title: "買 2x4 木料 10/17 送到 5/6 號", owner: undefined, due: undefined }],
+    ["10/17", { title: "10/17", owner: undefined, due: undefined }],
+  ])("parses shorthand %s", (input, expected) => expect(parseAdd(input)).toEqual(expected));
+
   it("adds, starts, completes and lists tasks", async () => {
     const { deps, replies } = setup({ plugins: ["tasks"] });
     await handleEvent(msg("/task add 去農場看木料 due:10/22"), deps);

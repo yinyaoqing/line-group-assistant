@@ -6,8 +6,8 @@ import type { GroupConfig } from "../src/core/types";
  */
 export const groups: GroupConfig[] = [
   {
-    groupId: "Ce54822d5dc78cc5df2b5210d2eafd0dc", // ← 換成你的群組 ID / replace with your group ID
-    name: "環樹木平台 Tree Platform",
+    groupId: "C375676c33509e2876dec2ea954befac4", // ← 換成你的群組 ID / replace with your group ID
+    name: "測試群組",
     plugins: ["translate", "tasks"],
     storage: { type: "sheets", sheetId: "1DPCdiy2Wk6M6_Ibryf0IODfz9e-oVgHa92q70CltKIY" },
     settings: {
