@@ -7,7 +7,7 @@
 | 外掛 | 功能 |
 | --- | --- |
 | `translate` | 中文訊息自動回覆英文翻譯，英文訊息回覆繁體中文翻譯。引擎可選 Google、DeepL、Claude |
-| `tasks` | 任務與進度：`/任務 新增`、`開始`、`完成`、`指派`，每週一自動推播進度摘要（選用） |
+| `tasks` | 任務與進度：`/task add`、`start`、`done`、`assign`，每週一自動推播進度摘要（選用） |
 
 `tasks` 同時是撰寫新外掛的範本，排班、工具借還、材料運送、缺料回報都可以照同樣模式寫。
 
@@ -117,13 +117,15 @@ https://line-group-assistant.<你的帳號>.workers.dev/webhook
 | `/id` | 顯示群組 ID |
 | `/help` | 列出目前可用指令 |
 | `/t <文字>` | 翻譯這段文字（`trigger: "command"` 時的唯一翻譯方式） |
-| `/任務` 或 `/task` | 列出未完成的任務 |
-| `/任務 新增 <內容> [負責:名字] [期限:10/20]` | 新增任務，未指定負責人時預設為發言者 |
-| `/任務 開始 <編號>` | 標記為進行中 |
-| `/任務 完成 <編號>` | 標記為完成 |
-| `/任務 指派 <編號> <名字>` | 更換負責人 |
+| `/translate off`、`/translate on` | 關閉／開啟本群組的自動翻譯，關閉時 `/t` 仍可用；狀態存在試算表的 `translate` 分頁 |
+| `/translate` | 顯示自動翻譯目前是開啟或關閉 |
+| `/task` | 列出未完成的任務（同 `/task list`） |
+| `/task add <內容> [owner:名字] [due:10/20]` | 新增任務，未指定負責人時預設為發言者 |
+| `/task start <編號>` | 標記為進行中 |
+| `/task done <編號>` | 標記為完成 |
+| `/task assign <編號> <名字>` | 更換負責人 |
 
-英文子指令也可以用：`/task add`、`start`、`done`、`assign`、`list`。
+指令一律使用英文；任務內容、名字可以用中文。
 
 ## 寫一個新外掛
 
@@ -134,7 +136,7 @@ import { text } from "../../core/types";
 
 export const tools: Plugin = {
   name: "tools",
-  commands: ["工具", "tool"],
+  commands: ["tool"],
   async onCommand(input, ctx) {
     const rows = await ctx.storage.list("tools");          // 讀「tools」分頁
     const hit = rows.find((r) => r.name === input.args[0]);

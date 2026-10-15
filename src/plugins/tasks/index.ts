@@ -5,11 +5,11 @@ import type { Row } from "../../storage/types";
 /**
  * Task & progress tracking, stored in the "tasks" table (a sheet tab).
  *
- *   /任務                      list open tasks          (/task)
- *   /任務 新增 <內容> [負責:名字] [期限:10/20]          (/task add …)
- *   /任務 開始 <編號>                                   (/task start <id>)
- *   /任務 完成 <編號>                                   (/task done <id>)
- *   /任務 指派 <編號> <名字>                            (/task assign <id> <name>)
+ *   /task                                   list open tasks
+ *   /task add <title> [owner:name] [due:10/20]
+ *   /task start <id>
+ *   /task done <id>
+ *   /task assign <id> <name>
  *
  * Settings (group.settings.tasks):
  *   digest: true  – push a summary of open tasks on each cron run (uses push quota; default off)
@@ -21,16 +21,16 @@ const TABLE = "tasks";
 const STATUS = { todo: "未開始", doing: "進行中", done: "完成" } as const;
 
 const SUB: Record<string, "add" | "start" | "done" | "assign" | "list"> = {
-  新增: "add", add: "add",
-  開始: "start", start: "start",
-  完成: "done", done: "done",
-  指派: "assign", assign: "assign",
-  列表: "list", list: "list",
+  add: "add",
+  start: "start",
+  done: "done",
+  assign: "assign",
+  list: "list",
 };
 
 export const tasks: Plugin = {
   name: "tasks",
-  commands: ["任務", "task"],
+  commands: ["task"],
 
   async onCommand(input, ctx) {
     const [first, ...restArgs] = input.args;
@@ -45,7 +45,7 @@ export const tasks: Plugin = {
       }
       case "add": {
         const { title, owner, due } = parseAdd(restArgs.join(" "));
-        if (!title) return [text("用法 Usage: /任務 新增 <內容> [負責:名字] [期限:10/20]")];
+        if (!title) return [text("用法 Usage: /task add <內容 title> [owner:名字 name] [due:10/20]")];
         const by = (await ctx.displayName(input.userId)) ?? "";
         const row = await db.append(TABLE, {
           title,
@@ -60,7 +60,7 @@ export const tasks: Plugin = {
       case "start":
       case "done": {
         const id = restArgs[0];
-        if (!id) return [text(`用法 Usage: /任務 ${sub === "start" ? "開始" : "完成"} <編號 id>`)];
+        if (!id) return [text(`用法 Usage: /task ${sub} <編號 id>`)];
         const row = await db.update(TABLE, id, {
           status: sub === "start" ? STATUS.doing : STATUS.done,
           ...(sub === "done" ? { doneAt: new Date(input.event.timestamp).toISOString() } : {}),
@@ -69,7 +69,7 @@ export const tasks: Plugin = {
       }
       case "assign": {
         const [id, ...who] = restArgs;
-        if (!id || !who.length) return [text("用法 Usage: /任務 指派 <編號> <名字>")];
+        if (!id || !who.length) return [text("用法 Usage: /task assign <編號 id> <名字 name>")];
         const row = await db.update(TABLE, id, { owner: who.join(" ") });
         return [text(row ? `👤 ${fmt(row)}` : `找不到任務 #${id} / Task #${id} not found`)];
       }
@@ -93,13 +93,13 @@ function fmt(r: Row): string {
   return parts.join(" ");
 }
 
-/** Pull "負責:名字" / "owner:name" and "期限:10/20" / "due:10/20" out of free text. */
+/** Pull "owner:name" and "due:10/20" out of free text. */
 export function parseAdd(s: string): { title: string; owner?: string; due?: string } {
   let owner: string | undefined;
   let due: string | undefined;
   const title = s
-    .replace(/(?:負責|owner)[:：]\s*(\S+)/i, (_, v: string) => ((owner = v), ""))
-    .replace(/(?:期限|due)[:：]\s*(\S+)/i, (_, v: string) => ((due = v), ""))
+    .replace(/owner[:：]\s*(\S+)/i, (_, v: string) => ((owner = v), ""))
+    .replace(/due[:：]\s*(\S+)/i, (_, v: string) => ((due = v), ""))
     .replace(/\s+/g, " ")
     .trim();
   return { title, owner, due };

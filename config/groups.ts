@@ -12,7 +12,7 @@ export const groups: GroupConfig[] = [
     storage: { type: "sheets", sheetId: "1DPCdiy2Wk6M6_Ibryf0IODfz9e-oVgHa92q70CltKIY" },
     settings: {
       translate: {
-        engine: "claude",
+        engine: "google",
         trigger: "all",
         showName: true,
         glossary: "Zace = Zace; 收頭樑 = trimmer beam; 格柵 = joist; 南方松 = southern yellow pine; 奕叡老師 = Teacher Yirui",

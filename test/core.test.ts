@@ -53,7 +53,7 @@ describe("signature", () => {
 
 describe("parseCommand", () => {
   it("splits name and args", () => {
-    expect(parseCommand("/任務 新增 買螺絲")).toEqual({ name: "任務", args: ["新增", "買螺絲"], rest: "新增 買螺絲" });
+    expect(parseCommand("/task add 買螺絲")).toEqual({ name: "task", args: ["add", "買螺絲"], rest: "add 買螺絲" });
     expect(parseCommand("hello")).toBeNull();
   });
 });
@@ -112,10 +112,28 @@ describe("translate plugin", () => {
     err.mockRestore();
   });
 
+  it("turns automatic translation off and on, keeping /t available", async () => {
+    const { deps, replies, storage } = setup({ groupId: "Ctoggle" });
+    const spy = vi.spyOn(engines, "claude").mockResolvedValue("Hi");
+    const m = (t: string) => msg(t, "Ctoggle");
+    await handleEvent(m("/translate off"), deps);
+    expect(textOf(replies[0]?.[0])).toContain("已關閉");
+    expect((await storage.list("translate"))[0]?.enabled).toBe("false");
+    await handleEvent(m("大家好"), deps);
+    expect(spy).not.toHaveBeenCalled();
+    await handleEvent(m("/t 大家好"), deps);
+    expect(spy).toHaveBeenCalledTimes(1);
+    await handleEvent(m("/translate on"), deps);
+    await handleEvent(m("大家好"), deps);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await storage.list("translate")).toHaveLength(1);
+    spy.mockRestore();
+  });
+
   it("does not translate commands", async () => {
     const { deps } = setup();
     const spy = vi.spyOn(engines, "claude").mockResolvedValue("x");
-    await handleEvent(msg("/任務"), deps);
+    await handleEvent(msg("/task"), deps);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -123,23 +141,23 @@ describe("translate plugin", () => {
 
 describe("tasks plugin", () => {
   it("parses owner and due date", () => {
-    expect(parseAdd("載木料 負責:Zace 期限:10/20")).toEqual({ title: "載木料", owner: "Zace", due: "10/20" });
+    expect(parseAdd("載木料 owner:Zace due:10/20")).toEqual({ title: "載木料", owner: "Zace", due: "10/20" });
   });
 
   it("adds, starts, completes and lists tasks", async () => {
     const { deps, replies } = setup({ plugins: ["tasks"] });
-    await handleEvent(msg("/任務 新增 去農場看木料 期限:10/22"), deps);
+    await handleEvent(msg("/task add 去農場看木料 due:10/22"), deps);
     expect(textOf(replies[0]?.[0])).toContain("#1 去農場看木料 [未開始] 👤Joseph ⏰10/22");
     await handleEvent(msg("/task start 1"), deps);
     expect(textOf(replies[1]?.[0])).toContain("[進行中]");
-    await handleEvent(msg("/任務 完成 1"), deps);
-    await handleEvent(msg("/任務"), deps);
+    await handleEvent(msg("/task done 1"), deps);
+    await handleEvent(msg("/task"), deps);
     expect(textOf(replies[3]?.[0])).toContain("沒有未完成");
   });
 
   it("pushes a weekly digest only when enabled and tasks are open", async () => {
     const { deps, pushes } = setup({ plugins: ["tasks"] });
-    await handleEvent(msg("/任務 新增 買螺絲"), deps);
+    await handleEvent(msg("/task add 買螺絲"), deps);
     await handleSchedule("0 0 * * 1", deps);
     expect(pushes).toHaveLength(0);
     deps.groups[0]!.settings = { tasks: { digest: true } };
