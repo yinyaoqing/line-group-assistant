@@ -98,6 +98,20 @@ describe("translate plugin", () => {
     spy.mockRestore();
   });
 
+  it("warns once per window when the engine fails, but always for /t", async () => {
+    const { deps, replies } = setup();
+    const spy = vi.spyOn(engines, "claude").mockRejectedValue(new Error("Claude 400"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    await handleEvent(msg("大家好"), deps);
+    await handleEvent(msg("明天見"), deps);
+    expect(replies).toHaveLength(1);
+    expect(textOf(replies[0]?.[0])).toContain("翻譯暫時無法使用");
+    await handleEvent(msg("/t 謝謝"), deps);
+    expect(replies).toHaveLength(2);
+    spy.mockRestore();
+    err.mockRestore();
+  });
+
   it("does not translate commands", async () => {
     const { deps } = setup();
     const spy = vi.spyOn(engines, "claude").mockResolvedValue("x");

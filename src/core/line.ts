@@ -23,7 +23,7 @@ export interface LineApi {
 }
 
 export class LineClient implements LineApi {
-  constructor(private token: string, private fetchFn: typeof fetch = fetch) {}
+  constructor(private token: string, private fetchFn: typeof fetch = (input, init) => fetch(input, init)) {}
 
   private async call(path: string, init: RequestInit): Promise<Response> {
     const res = await this.fetchFn(`${API}${path}`, {

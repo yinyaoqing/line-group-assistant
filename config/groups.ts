@@ -6,10 +6,10 @@ import type { GroupConfig } from "../src/core/types";
  */
 export const groups: GroupConfig[] = [
   {
-    groupId: "C00000000000000000000000000000000", // ← 換成你的群組 ID / replace with your group ID
+    groupId: "Ce54822d5dc78cc5df2b5210d2eafd0dc", // ← 換成你的群組 ID / replace with your group ID
     name: "環樹木平台 Tree Platform",
     plugins: ["translate", "tasks"],
-    storage: { type: "sheets", sheetId: "YOUR_SPREADSHEET_ID" },
+    storage: { type: "sheets", sheetId: "1DPCdiy2Wk6M6_Ibryf0IODfz9e-oVgHa92q70CltKIY" },
     settings: {
       translate: {
         engine: "claude",

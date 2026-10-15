@@ -22,16 +22,34 @@ export const translate: Plugin = {
 
   async onMessage(input, ctx) {
     if ((ctx.settings.trigger ?? "all") !== "all") return;
-    return run(input.text, input.userId, ctx);
+    return run(input.text, input.userId, ctx, false);
   },
 
   async onCommand(input, ctx) {
     if (!input.rest) return [text("用法 Usage: /t <要翻譯的文字 text to translate>")];
-    return run(input.rest, input.userId, ctx);
+    return run(input.rest, input.userId, ctx, true);
   },
 };
 
-async function run(source: string, userId: string | undefined, ctx: Parameters<NonNullable<Plugin["onMessage"]>>[1]) {
+type Ctx = Parameters<NonNullable<Plugin["onMessage"]>>[1];
+
+/** Warn the group at most once per window when automatic translation keeps failing. */
+const NOTICE_WINDOW_MS = 10 * 60 * 1000;
+const lastNotice = new Map<string, number>();
+
+async function run(source: string, userId: string | undefined, ctx: Ctx, explicit: boolean) {
+  try {
+    return await translateText(source, userId, ctx);
+  } catch (err) {
+    console.error("translate failed", err);
+    const now = Date.now();
+    if (!explicit && now - (lastNotice.get(ctx.group.groupId) ?? 0) < NOTICE_WINDOW_MS) return;
+    lastNotice.set(ctx.group.groupId, now);
+    return [text("⚠️ 翻譯暫時無法使用，請稍後再試。\nTranslation is temporarily unavailable.")];
+  }
+}
+
+async function translateText(source: string, userId: string | undefined, ctx: Ctx) {
   const s = ctx.settings;
   if (source.trim().length < Number(s.minLength ?? 2)) return;
   const lang = detectLang(source, Number(s.zhRatio ?? 0.3));

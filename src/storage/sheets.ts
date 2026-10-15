@@ -12,7 +12,7 @@ export class SheetsStorage implements Storage {
   constructor(
     private sheetId: string,
     private serviceAccountJson: string,
-    private fetchFn: typeof fetch = fetch,
+    private fetchFn: typeof fetch = (input, init) => fetch(input, init),
   ) {}
 
   // ---------- public API ----------
