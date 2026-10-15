@@ -1,0 +1,17 @@
+name = "line-group-assistant"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# 每週一 08:00（台北時間）= 週一 00:00 UTC，用來推播每週摘要。
+# Weekly digest: Monday 08:00 Taipei = Monday 00:00 UTC.
+[triggers]
+crons = ["0 0 * * 1"]
+
+# 金鑰請用 `wrangler secret put <NAME>` 設定，不要寫在這裡：
+# Set secrets with `wrangler secret put <NAME>`, never in this file:
+#   LINE_CHANNEL_SECRET          (required)
+#   LINE_CHANNEL_ACCESS_TOKEN    (required)
+#   GOOGLE_SERVICE_ACCOUNT_JSON  (sheets storage)
+#   GOOGLE_TRANSLATE_API_KEY     (translate engine "google")
+#   DEEPL_API_KEY                (translate engine "deepl")
+#   ANTHROPIC_API_KEY            (translate engine "claude")

@@ -1,0 +1,49 @@
+import type { Plugin } from "../../core/types";
+import { text } from "../../core/types";
+import { detectLang } from "./detect";
+import { engines, type TranslateOptions } from "./engines";
+
+/**
+ * Settings (group.settings.translate):
+ *   engine:    "google" | "deepl" | "claude"   (default "google")
+ *   trigger:   "all"  – translate every text message (default)
+ *              "command" – only messages sent as "/t <text>"
+ *   showName:  prefix the translation with the sender's name (default true)
+ *   minLength: skip messages shorter than this many characters (default 2)
+ *   zhRatio:   share of Chinese needed to treat mixed text as Chinese (default 0.3)
+ *   glossary:  fixed term translations, used by the "claude" engine
+ *   model:     Claude model override
+ *
+ * Replies use the reply token, so translations do not use the monthly push quota.
+ */
+export const translate: Plugin = {
+  name: "translate",
+  commands: ["t"],
+
+  async onMessage(input, ctx) {
+    if ((ctx.settings.trigger ?? "all") !== "all") return;
+    return run(input.text, input.userId, ctx);
+  },
+
+  async onCommand(input, ctx) {
+    if (!input.rest) return [text("用法 Usage: /t <要翻譯的文字 text to translate>")];
+    return run(input.rest, input.userId, ctx);
+  },
+};
+
+async function run(source: string, userId: string | undefined, ctx: Parameters<NonNullable<Plugin["onMessage"]>>[1]) {
+  const s = ctx.settings;
+  if (source.trim().length < Number(s.minLength ?? 2)) return;
+  const lang = detectLang(source, Number(s.zhRatio ?? 0.3));
+  if (lang === "skip") return;
+
+  const engine = engines[String(s.engine ?? "google")];
+  if (!engine) throw new Error(`unknown translate engine: ${String(s.engine)}`);
+  const opts: TranslateOptions = { glossary: s.glossary as string | undefined, model: s.model as string | undefined };
+
+  const out = await engine(source, lang === "zh" ? "en" : "zh-TW", ctx.env, opts);
+  if (!out || out.trim() === source.trim()) return;
+
+  const name = s.showName === false ? undefined : await ctx.displayName(userId);
+  return [text(name ? `🌐 ${name}：${out}` : `🌐 ${out}`)];
+}
