@@ -10,12 +10,13 @@ import { detectScript } from "../src/plugins/translate/detect";
 import { engines } from "../src/plugins/translate/engines";
 import { MemoryAdminRepo } from "../src/storage/admins";
 import { MemoryChannelRepo } from "../src/storage/channels";
+import { MemoryCodeRepo } from "../src/storage/codes";
 import { MemoryGroupRepo, MemoryUsageMeter } from "../src/storage/groups";
 import { MemoryStorage } from "../src/storage/memory";
 
 const SECRET = "test-app-secret";
 
-function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "default", joinPolicy: "code", activationCode: "code123" }) {
+function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "default", joinPolicy: "code" }) {
   const replies: LineMessage[][] = [];
   const line: LineApi = {
     reply: async (_t, m) => void replies.push(m),
@@ -27,12 +28,16 @@ function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "def
   const admins = new MemoryAdminRepo();
   const usage = new MemoryUsageMeter();
   const storage = new MemoryStorage();
+  // A one-time code "CODE-123" that the activation tests use.
+  const codes = new MemoryCodeRepo();
+  codes.codes.push({ code: "CODE123", label: "test", channelId: "default", plan: "free" });
   const deps: Deps = {
     env: { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", DB: {} as D1Database, APP_SECRET: SECRET, LIFF_ID: "123-abc", GOOGLE_TRANSLATE_API_KEY: "k" },
     line,
     channel,
     groups: repo,
     admins,
+    codes,
     usage,
     plugins,
     storageFor: () => storage,
@@ -43,6 +48,7 @@ function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "def
     groups: repo,
     admins,
     channels: new MemoryChannelRepo(),
+    codes,
     usage,
     plugins,
     lineFor: async () => line,
@@ -51,7 +57,7 @@ function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "def
     storageFor: () => storage,
     ...overrides,
   });
-  return { deps, replies, repo, admins, usage, api };
+  return { deps, replies, repo, admins, usage, api, codes };
 }
 
 const msg = (text: string, userId = "U1", groupId = "Cg", mention?: string[]): LineEvent => ({
@@ -610,5 +616,57 @@ describe("done needs a report", () => {
     const csv = tasksCsv(await buildReport((await w.repo.get("Cg"))!, w.deps.storageFor(active())));
     expect(csv).toContain("完成回報／失敗原因");
     expect(csv).toContain(",租到 2 台,");
+  });
+});
+
+describe("one-time activation codes", () => {
+  const join = (groupId: string): LineEvent => ({ type: "join", replyToken: "r", timestamp: 0, source: { type: "group", groupId } });
+
+  it("work once, and start the group on the plan they carry", async () => {
+    const w = world();
+    const pro = await w.codes.create({ label: "王師傅", channelId: "default", plan: "pro", planUntil: "2099-12-31" });
+    await handleEvent(join("Ca"), w.deps);
+    await handleEvent(msg(`/activate ${pro.code.slice(0, 4)}-${pro.code.slice(4, 8)}-${pro.code.slice(8)}`, "U1", "Ca"), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toContain("💎 方案 Plan：專業版 Pro（到 2099-12-31）");
+    expect(await w.repo.get("Ca")).toMatchObject({ status: "active", plan: "pro", planUntil: "2099-12-31" });
+    expect(await w.admins.get("Ca", "U1")).toMatchObject({ role: "owner" });
+
+    await handleEvent(join("Cb"), w.deps);
+    await handleEvent(msg(`/activate ${pro.code}`, "U2", "Cb"), w.deps);
+    expect(textOf(w.replies[3]?.[0])).toContain("已使用或已過期");
+    expect((await w.repo.get("Cb"))?.status).toBe("pending");
+  });
+
+  it("are issued, listed and revoked by platform admins", async () => {
+    const w = world([active({ name: "工班" })]);
+    const api = w.api();
+    const call = async (method: string, path: string, body?: unknown, session?: string) => {
+      const res = await handleApi(
+        new Request("https://bot.example" + path, {
+          method,
+          headers: { "Content-Type": "application/json", ...(session ? { Authorization: "Bearer " + session } : {}) },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }),
+        api,
+      );
+      return { status: res.status, data: (await res.json()) as any };
+    };
+    const boss = (await call("POST", "/api/session", { idToken: "ok:boss" })).data.session as string;
+    const other = (await call("POST", "/api/session", { idToken: "ok:someone" })).data.session as string;
+    expect((await call("POST", "/api/admin/codes", {}, other)).status).toBe(403);
+
+    const made = await call("POST", "/api/admin/codes", { label: "王師傅", plan: "pro", planUntil: "2099-12-31", validDays: 30, count: 2 }, boss);
+    expect(made.data).toHaveLength(2);
+    expect(made.data[0].code).toMatch(/^[2-9A-Z]{4}-[2-9A-Z]{4}-[2-9A-Z]{4}$/);
+    expect((await call("POST", "/api/admin/codes", { count: 21 }, boss)).status).toBe(400);
+    expect((await call("POST", "/api/admin/codes", { channelId: "nope" }, boss)).status).toBe(400);
+
+    await handleEvent(msg(`/activate ${made.data[0].code}`, "U1", "Cg"), w.deps); // claims Cg
+    const list = (await call("GET", "/api/admin/codes", undefined, boss)).data as { code: string; status: string; usedGroup?: string }[];
+    expect(list.find((c) => c.code === made.data[0].code)).toMatchObject({ status: "used", usedGroup: "工班" });
+    expect(list.find((c) => c.code === made.data[1].code)).toMatchObject({ status: "unused" });
+
+    expect((await call("DELETE", `/api/admin/codes/${made.data[0].code}`, undefined, boss)).status).toBe(400);
+    expect((await call("DELETE", `/api/admin/codes/${made.data[1].code}`, undefined, boss)).status).toBe(200);
   });
 });

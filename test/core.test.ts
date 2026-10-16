@@ -7,6 +7,7 @@ import { detectLang } from "../src/plugins/translate/detect";
 import { engines } from "../src/plugins/translate/engines";
 import { parseAdd } from "../src/plugins/tasks";
 import { MemoryAdminRepo } from "../src/storage/admins";
+import { MemoryCodeRepo } from "../src/storage/codes";
 import { MemoryGroupRepo, MemoryUsageMeter } from "../src/storage/groups";
 import { MemoryStorage } from "../src/storage/memory";
 
@@ -34,19 +35,21 @@ function setup(group: Partial<GroupConfig> = {}, env: Partial<Deps["env"]> = {})
   ]);
   const usage = new MemoryUsageMeter();
   const admins = new MemoryAdminRepo();
+  const codes = new MemoryCodeRepo();
   const fullEnv = { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", ANTHROPIC_API_KEY: "k", DB: {} as D1Database, ...env };
   const deps: Deps = {
     env: fullEnv,
     line,
-    channel: { id: "default", joinPolicy: "code", activationCode: fullEnv.ACTIVATION_CODE },
+    channel: { id: "default", joinPolicy: "code" },
     groups,
     admins,
+    codes,
     usage,
     plugins,
     storageFor: () => storage,
     origin: "https://bot.example",
   };
-  return { deps, replies, pushes, storage, groups, usage, admins, line };
+  return { deps, replies, pushes, storage, groups, usage, admins, line, codes };
 }
 
 const msg = (text: string, groupId = GID): LineEvent => ({
@@ -222,7 +225,8 @@ describe("group registration and activation", () => {
   const join = (groupId: string): LineEvent => ({ type: "join", replyToken: "r", timestamp: 0, source: { type: "group", groupId } });
 
   it("registers an invited group as pending and ignores it until activated", async () => {
-    const { deps, replies, groups } = setup({}, { ACTIVATION_CODE: "open-sesame" });
+    const { deps, replies, groups, codes } = setup();
+    const code = await codes.create({ label: "test", channelId: "default", plan: "free" });
     await handleEvent(join("Cnew"), deps);
     expect(await groups.get("Cnew")).toMatchObject({ status: "pending", name: "工班群組", plugins: ["translate", "tasks", "tools", "materials"] });
     expect(textOf(replies[0]?.[0])).toContain("/activate");
@@ -231,8 +235,8 @@ describe("group registration and activation", () => {
     expect(replies).toHaveLength(1);
 
     await handleEvent(msg("/activate wrong", "Cnew"), deps);
-    expect(textOf(replies[1]?.[0])).toContain("錯誤");
-    await handleEvent(msg("/activate open-sesame", "Cnew"), deps);
+    expect(textOf(replies[1]?.[0])).toContain("無效");
+    await handleEvent(msg(`/activate ${code.code.toLowerCase()}`, "Cnew"), deps);
     expect(textOf(replies[2]?.[0])).toContain("已啟用");
     expect((await groups.get("Cnew"))?.status).toBe("active");
 
@@ -240,11 +244,11 @@ describe("group registration and activation", () => {
     expect(textOf(replies[3]?.[0])).toContain("沒有未完成");
   });
 
-  it("refuses chat activation when no code is configured", async () => {
+  it("asks for a code when /activate has none", async () => {
     const { deps, replies, groups } = setup();
     await handleEvent(join("Cnew"), deps);
-    await handleEvent(msg("/activate anything", "Cnew"), deps);
-    expect(textOf(replies[1]?.[0])).toContain("尚未開放");
+    await handleEvent(msg("/activate", "Cnew"), deps);
+    expect(textOf(replies[1]?.[0])).toContain("請輸入啟用碼");
     expect((await groups.get("Cnew"))?.status).toBe("pending");
   });
 

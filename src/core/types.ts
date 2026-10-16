@@ -11,8 +11,6 @@ export interface Env {
   ANTHROPIC_API_KEY?: string;
   /** Groups, plugin tables and usage. */
   DB: D1Database;
-  /** Code a group sends as "/activate <code>" to turn the bot on; unset = no activation from chat. */
-  ACTIVATION_CODE?: string;
   /** Signs settings-page links and sessions, and encrypts white-label channel credentials. */
   APP_SECRET?: string;
   /** LIFF app that hosts the settings page, and the LINE Login channel it belongs to. */

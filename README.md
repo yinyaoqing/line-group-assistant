@@ -50,7 +50,7 @@ test/                   測試（d1.test.ts 會在本機模擬的 D1 上跑真�
 - **回覆不吃額度**：所有外掛的回覆會合併成一次 reply（最多 5 則），不算在官方帳號的每月推播額度內。只有排程摘要這類主動推播才會用到額度，而且是依群組人數計算則數。
 - **背景處理**：webhook 收到後立即回 200，翻譯與寫入試算表在 `ctx.waitUntil` 裡完成，避免 LINE 逾時重送。
 - **設定與資料放在 D1**：群組設定、任務、用量都在 Cloudflare D1，新增群組不用改程式、不用重新部署。個別群組也可以改用 Google Sheets 儲存，讓不寫程式的成員直接查看或修正資料。
-- **邀請即登記、啟用碼開通**：機器人被邀進群組時自動登記為「待啟用」，只回覆群組 ID；有人輸入 `/activate <啟用碼>` 後才開始翻譯、記任務，避免陌生群組用掉翻譯額度。
+- **邀請即登記、啟用碼開通**：機器人被邀進群組時自動登記為「待啟用」，只回覆群組 ID；有人輸入 `/activate <啟用碼>` 後才開始翻譯、記任務，避免陌生群組用掉翻譯額度。啟用碼是**一次性**的：平台管理員在設定頁「啟用碼」分頁逐組產生，每組只能用一次、可設有效天數，也可以帶方案（例如專業版到 12/31），群組一啟用就套用。
 - **用量計量**：每個群組每月翻譯的字元數記在 `usage` 表（翻成 N 種語言就算 N 次），超過方案額度就暫停自動翻譯並提示一次，下個月（台北時間）自動恢復。
 - **方案**：在 [config/plans.ts](config/plans.ts) 定義。免費版 5 萬字／月、中英互譯；專業版 NT$249／群組／月、50 萬字、全部語言、每週摘要。目前沒有串金流：客戶付款後，平台管理員在設定頁的「所有群組」把方案改成 pro 並填到期日，過期自動回到免費版。
 - **管理員**：輸入 `/activate` 的人成為群組擁有者，可用 `/admin add @成員` 新增管理員。只有管理員能用 `/settings` 取得設定頁連結（10 分鐘內有效、只能用一次）。
@@ -89,7 +89,6 @@ npm run db:migrate                                     # 建立 D1 資料表
 npx wrangler secret put LINE_CHANNEL_SECRET
 npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
 npx wrangler secret put GOOGLE_TRANSLATE_API_KEY      # 或 DEEPL_API_KEY / ANTHROPIC_API_KEY
-npx wrangler secret put ACTIVATION_CODE               # 群組用 /activate <啟用碼> 開通
 npx wrangler secret put APP_SECRET                    # 隨機長字串：簽設定頁連結、加密白牌金鑰（換掉會讓白牌金鑰失效）
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON   # 選用：有群組要用試算表儲存時才需要
 npm run deploy
@@ -118,13 +117,17 @@ https://line-group-assistant.<你的帳號>.workers.dev/webhook
 ### 6. 加入群組並設定
 
 1. 把官方帳號邀請進 LINE 群組，機器人會自動登記這個群組並回覆群組 ID。
-2. 在群組輸入 `/activate <啟用碼>`，你會成為這個群組的管理員。
+2. 平台管理員在設定頁「啟用碼」分頁產生一組啟用碼，在群組輸入 `/activate <啟用碼>`，輸入的人成為這個群組的管理員。第一次部署時還沒有平台管理員，可以先用下面的 SQL 產生一組：
+   ```bash
+   npx wrangler d1 execute line-group-assistant --remote --command "INSERT INTO activation_codes (code, label) VALUES ('FIRSTCODE2345', 'first')"
+   ```
+   然後在群組輸入 `/activate FIRS-TCOD-E234-5`（大小寫、`-` 都不影響）。
 3. 輸入 `/settings` 開設定頁，選語言、功能；輸入 `/help` 查看指令。
 
 ### 7. 新增白牌客戶
 
 1. 客戶建立自己的官方帳號與 Messaging API channel，把 Channel secret 與 access token 給你。
-2. 平台管理員在設定頁「白牌頻道」新增，取一個代號（例如 `acme`），選擇群組要「邀請即啟用」或「需要啟用碼」。
+2. 平台管理員在設定頁「白牌頻道」新增，取一個代號（例如 `acme`），選擇群組要「邀請即啟用」或「需要啟用碼」；需要啟用碼時，在「啟用碼」分頁選這個頻道產生，啟用碼只能用在該頻道。
 3. 把頁面顯示的 `https://…/webhook/acme` 填進客戶 channel 的 Webhook URL，並照第 1 步開啟群組、關閉自動回應。
 
 ## 群組設定
@@ -177,7 +180,7 @@ npx wrangler d1 execute line-group-assistant --remote --command "SELECT * FROM u
 | 指令 | 說明 |
 | --- | --- |
 | `/id` | 顯示群組 ID 與是否已啟用 |
-| `/activate <啟用碼>` | 開通這個群組，輸入的人成為擁有者（只需一次） |
+| `/activate <啟用碼>` | 用一次性啟用碼開通這個群組，輸入的人成為擁有者；啟用碼用過即失效 |
 | `/settings` | 管理員取得設定頁連結 |
 | `/admin`、`/admin add @成員`、`/admin remove @成員` | 查看、新增、移除管理員（移除限擁有者） |
 | `/help` | 使用說明：依功能分組，每個指令附範例 |
@@ -255,4 +258,4 @@ PLATFORM_ADMINS=boss
 - **隱私**：開啟 `translate` 後，群組中所有文字訊息都會送到所選的翻譯服務，請先告知群組成員。
 - **額度**：輕用量方案每月 200 則推播，依「訊息數 × 收件人數」計算。10 人群組每週推一次摘要，一個月約 40 則。
 - **資料一致性**：D1 儲存的任務編號以單一 SQL 原子遞增，多人同時新增也不會重複。Sheets 儲存適合小型群組：多人在同一秒新增任務時編號可能重複，而且 Sheets API 每分鐘的請求數是整個 Google Cloud 專案共用，群組多時請用 D1。
-- **啟用碼**：知道啟用碼的人都能開通任何群組，請只給要付費或試用的客戶，外流時用 `wrangler secret put ACTIVATION_CODE` 換一組。
+- **啟用碼**：每組只能用一次，在群組裡被看到也無法再用；還沒用的可以在「啟用碼」分頁作廢。

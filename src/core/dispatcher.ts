@@ -1,10 +1,11 @@
 import { defaultGroup } from "../../config/defaults";
 import { effectivePlan } from "../../config/plans";
 import type { AdminRepo } from "../storage/admins";
+import type { ActivationCode, CodeRepo } from "../storage/codes";
 import type { GroupRepo, UsageMeter } from "../storage/groups";
 import type { Storage } from "../storage/types";
 import { buildReport, reportUrl, summaryText } from "../report";
-import { randomId, sameText, signToken } from "./crypto";
+import { randomId, signToken } from "./crypto";
 import type { LineApi } from "./line";
 import type { Env, GroupConfig, LineEvent, LineMessage, Plugin, PluginContext } from "./types";
 import { text, withQuickReply, type QuickItem, type Template } from "./types";
@@ -12,9 +13,8 @@ import { text, withQuickReply, type QuickItem, type Template } from "./types";
 /** The LINE official account an event came in on, and how its groups get activated. */
 export interface ChannelInfo {
   id: string;
-  /** "open": groups activate as soon as the bot joins; "code": they need `/activate <code>`. */
+  /** "open": groups activate as soon as the bot joins; "code": they need a one-time `/activate <code>`. */
   joinPolicy: "open" | "code";
-  activationCode?: string;
 }
 
 export interface Deps {
@@ -24,6 +24,7 @@ export interface Deps {
   channel: ChannelInfo;
   groups: GroupRepo;
   admins: AdminRepo;
+  codes: CodeRepo;
   usage: UsageMeter;
   plugins: Record<string, Plugin>;
   storageFor(group: GroupConfig): Storage;
@@ -292,19 +293,27 @@ async function activate(
   const admins = await deps.admins.list(gid);
   if (group?.status === "active" && admins.length) return reply("✅ 此群組已啟用 Already active. 輸入 /help 查看指令");
 
+  // Code channels need a one-time code; it is used up here, whether it activates
+  // the group or claims an already-active group that has no admin yet.
+  let code: ActivationCode | undefined;
   if (deps.channel.joinPolicy === "code") {
-    const code = deps.channel.activationCode;
-    if (!code) return reply("⚠️ 尚未開放自助啟用，請聯絡管理員。\nSelf-activation is not available; contact the admin.");
-    if (!sameText(given ?? "", code)) return reply("❌ 啟用碼錯誤 Wrong activation code");
+    if (!given) return reply("請輸入啟用碼 Please add the code: /activate XXXX-XXXX-XXXX\n啟用碼請向服務提供者索取。");
+    code = await deps.codes.redeem(given, deps.channel.id, gid, userId);
+    if (!code) return reply("❌ 啟用碼無效、已使用或已過期\nThis code is invalid, already used or expired.");
   }
 
   if (!group) await deps.groups.register(defaultGroup(gid, deps.channel.id)); // joined before registration existed
-  const active = await deps.groups.activate(gid);
+  await deps.groups.activate(gid);
+  // A code can start the group on a paid plan.
+  const active = code && code.plan !== "free" ? await deps.groups.update(gid, { plan: code.plan, planUntil: code.planUntil ?? "" }) : await deps.groups.get(gid);
   const owner = userId && !admins.length;
   if (owner) await deps.admins.add(gid, userId, "owner");
+  const plan = active && effectivePlan(active.plan, active.planUntil);
   return reply(
     [
       group?.status === "active" ? "✅ 群組已啟用 Active" : "🎉 已啟用 Activated！",
+      code ? "🔑 啟用碼已使用，無法再次使用。 This code is now used up." : "",
+      plan && plan.id !== "free" ? `💎 方案 Plan：${plan.name}${active?.planUntil ? `（到 ${active.planUntil}）` : ""}` : "",
       `功能 Plugins: ${active?.plugins.join(", ")}`,
       owner ? "👑 你是這個群組的管理員，輸入 /settings 開啟設定頁。\nYou are this group's admin; send /settings to open the settings page." : "",
       "輸入 /help 查看指令 Send /help to see commands.",

@@ -5,9 +5,8 @@ export interface Channel {
   /** Channel secret and access token, AES-GCM encrypted (see core/crypto.ts). */
   secretEnc: string;
   tokenEnc: string;
-  /** "open": invited groups activate at once; "code": they need activationCode. */
+  /** "open": invited groups activate at once; "code": they need a one-time code (see codes.ts). */
   joinPolicy: "open" | "code";
-  activationCode?: string;
 }
 
 export interface ChannelRepo {
@@ -32,7 +31,6 @@ const fromRecord = (r: ChannelRecord): Channel => ({
   secretEnc: r.secret_enc,
   tokenEnc: r.token_enc,
   joinPolicy: r.join_policy === "code" ? "code" : "open",
-  activationCode: r.activation_code ?? undefined,
 });
 
 export class D1ChannelRepo implements ChannelRepo {
@@ -55,7 +53,7 @@ export class D1ChannelRepo implements ChannelRepo {
          ON CONFLICT (channel_id) DO UPDATE SET name = excluded.name, secret_enc = excluded.secret_enc,
            token_enc = excluded.token_enc, join_policy = excluded.join_policy, activation_code = excluded.activation_code`,
       )
-      .bind(c.channelId, c.name, c.secretEnc, c.tokenEnc, c.joinPolicy, c.activationCode ?? null)
+      .bind(c.channelId, c.name, c.secretEnc, c.tokenEnc, c.joinPolicy, null)
       .run();
   }
 

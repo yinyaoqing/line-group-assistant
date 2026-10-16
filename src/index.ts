@@ -8,6 +8,7 @@ import { plugins } from "./plugins";
 import { handleReport } from "./report";
 import { D1AdminRepo } from "./storage/admins";
 import { D1ChannelRepo } from "./storage/channels";
+import { D1CodeRepo } from "./storage/codes";
 import { D1Storage } from "./storage/d1";
 import { D1GroupRepo, D1UsageMeter } from "./storage/groups";
 import { MemoryStorage } from "./storage/memory";
@@ -41,7 +42,7 @@ function storageFor(env: Env) {
 async function loadChannel(env: Env, channelId: string): Promise<{ info: ChannelInfo; secret: string; token: string } | undefined> {
   if (channelId === "default") {
     return {
-      info: { id: "default", joinPolicy: "code", activationCode: env.ACTIVATION_CODE },
+      info: { id: "default", joinPolicy: "code" },
       secret: env.LINE_CHANNEL_SECRET,
       token: env.LINE_CHANNEL_ACCESS_TOKEN,
     };
@@ -50,7 +51,7 @@ async function loadChannel(env: Env, channelId: string): Promise<{ info: Channel
   const c = await new D1ChannelRepo(env.DB).get(channelId);
   if (!c) return undefined;
   return {
-    info: { id: c.channelId, joinPolicy: c.joinPolicy, activationCode: c.activationCode },
+    info: { id: c.channelId, joinPolicy: c.joinPolicy },
     secret: await decrypt(env.APP_SECRET, c.secretEnc),
     token: await decrypt(env.APP_SECRET, c.tokenEnc),
   };
@@ -79,6 +80,7 @@ async function webhook(req: Request, env: Env, ctx: ExecutionContext, channelId:
     channel: ch.info,
     groups: new D1GroupRepo(env.DB),
     admins: new D1AdminRepo(env.DB),
+    codes: new D1CodeRepo(env.DB),
     usage: new D1UsageMeter(env.DB),
     plugins,
     storageFor: storageFor(env),
@@ -107,6 +109,7 @@ export default {
         groups: new D1GroupRepo(env.DB),
         admins: new D1AdminRepo(env.DB),
         channels: new D1ChannelRepo(env.DB),
+        codes: new D1CodeRepo(env.DB),
         usage: new D1UsageMeter(env.DB),
         plugins,
         lineFor: lineFor(env),

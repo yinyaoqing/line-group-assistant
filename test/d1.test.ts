@@ -3,10 +3,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultGroup } from "../config/defaults";
 import { D1AdminRepo } from "../src/storage/admins";
 import { D1ChannelRepo } from "../src/storage/channels";
+import { D1CodeRepo, formatCode } from "../src/storage/codes";
 import { D1Storage } from "../src/storage/d1";
 import { D1GroupRepo, D1UsageMeter, monthKey } from "../src/storage/groups";
 import init from "../migrations/0001_init.sql?raw";
 import v2 from "../migrations/0002_admins_channels_plans.sql?raw";
+import v3 from "../migrations/0003_split_items.sql?raw";
+import v4 from "../migrations/0004_activation_codes.sql?raw";
 
 // Runs the real SQL against a local, in-memory D1 (workerd via wrangler).
 let proxy: PlatformProxy<{ DB: D1Database }>;
@@ -15,7 +18,7 @@ let db: D1Database;
 beforeAll(async () => {
   proxy = await getPlatformProxy<{ DB: D1Database }>({ persist: false });
   db = proxy.env.DB;
-  const sql = [init, v2].join(";\n").replace(/--.*$/gm, "");
+  const sql = [init, v2, v3, v4].join(";\n").replace(/--.*$/gm, "");
   const statements = sql.split(";").map((s: string) => s.trim()).filter(Boolean);
   await db.batch(statements.map((s: string) => db.prepare(s)));
 }, 60_000);
@@ -112,10 +115,30 @@ describe("D1ChannelRepo", () => {
   it("stores, updates and removes channels", async () => {
     const repo = new D1ChannelRepo(db);
     await repo.put({ channelId: "acme", name: "Acme", secretEnc: "s1", tokenEnc: "t1", joinPolicy: "open" });
-    await repo.put({ channelId: "acme", name: "Acme 2", secretEnc: "s2", tokenEnc: "t2", joinPolicy: "code", activationCode: "c" });
-    expect(await repo.get("acme")).toEqual({ channelId: "acme", name: "Acme 2", secretEnc: "s2", tokenEnc: "t2", joinPolicy: "code", activationCode: "c" });
+    await repo.put({ channelId: "acme", name: "Acme 2", secretEnc: "s2", tokenEnc: "t2", joinPolicy: "code" });
+    expect(await repo.get("acme")).toEqual({ channelId: "acme", name: "Acme 2", secretEnc: "s2", tokenEnc: "t2", joinPolicy: "code" });
     expect((await repo.list()).map((c) => c.channelId)).toEqual(["acme"]);
     await repo.remove("acme");
     expect(await repo.get("acme")).toBeUndefined();
+  });
+});
+
+describe("D1CodeRepo", () => {
+  it("redeems a code once, for its channel, before it expires", async () => {
+    const repo = new D1CodeRepo(db);
+    const now = new Date("2026-10-16T00:00:00Z");
+    const code = await repo.create({ label: "王師傅", channelId: "default", plan: "pro", planUntil: "2026-12-31", expiresAt: "2026-11-15T00:00:00Z" });
+    expect(code.code).toMatch(/^[2-9A-HJKMNP-Z]{12}$/);
+
+    expect(await repo.redeem(formatCode(code.code), "acme", "Cx", "U1", now)).toBeUndefined(); // wrong channel
+    const used = await repo.redeem(formatCode(code.code).toLowerCase(), "default", "Cx", "U1", now);
+    expect(used).toMatchObject({ label: "王師傅", plan: "pro", planUntil: "2026-12-31", usedGroup: "Cx", usedBy: "U1" });
+    expect(await repo.redeem(code.code, "default", "Cy", "U2", now)).toBeUndefined(); // once only
+    expect(await repo.revoke(code.code)).toBe(false); // used codes stay on record
+
+    const late = await repo.create({ label: "", channelId: "default", plan: "free", expiresAt: "2026-10-01T00:00:00Z" });
+    expect(await repo.redeem(late.code, "default", "Cz", "U3", now)).toBeUndefined(); // expired
+    expect(await repo.revoke(late.code)).toBe(true);
+    expect((await repo.list()).map((c) => c.code)).toEqual([code.code]);
   });
 });

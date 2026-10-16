@@ -160,6 +160,7 @@ async function home() {
   const tabs = me.platformAdmin ? h("div", { class: "tabs" },
     h("button", { class: "on" }, "我的群組"),
     h("button", { onclick: () => adminGroups().catch(fail) }, "所有群組"),
+    h("button", { onclick: () => adminCodes().catch(fail) }, "啟用碼"),
     h("button", { onclick: () => adminChannels().catch(fail) }, "白牌頻道")) : null;
   const list = me.groups.length
     ? h("div", { class: "list" }, me.groups.map((g) => h("button", { class: "item", onclick: () => groupPage(g.groupId).catch(fail) },
@@ -299,6 +300,7 @@ function adminTabs(active) {
   return h("div", { class: "tabs" },
     h("button", { onclick: () => home().catch(fail) }, "我的群組"),
     h("button", { class: active === "groups" ? "on" : "", onclick: () => adminGroups().catch(fail) }, "所有群組"),
+    h("button", { class: active === "codes" ? "on" : "", onclick: () => adminCodes().catch(fail) }, "啟用碼"),
     h("button", { class: active === "channels" ? "on" : "", onclick: () => adminChannels().catch(fail) }, "白牌頻道"));
 }
 
@@ -342,8 +344,7 @@ async function adminChannels() {
     name: h("input", { type: "text", placeholder: "客戶名稱" }),
     secret: h("input", { type: "text", placeholder: "Channel secret" }),
     token: h("input", { type: "text", placeholder: "Channel access token" }),
-    joinPolicy: h("select", {}, h("option", { value: "open" }, "邀請即啟用 open"), h("option", { value: "code" }, "需要啟用碼 code")),
-    activationCode: h("input", { type: "text", placeholder: "需要啟用碼時填" }),
+    joinPolicy: h("select", {}, h("option", { value: "open" }, "邀請即啟用 open"), h("option", { value: "code" }, "需要一次性啟用碼 code")),
   };
   const add = h("button", { class: "primary", onclick: async () => {
     add.disabled = true;
@@ -373,10 +374,84 @@ async function adminChannels() {
         h("label", { class: "field" }, "名稱", f.name),
         h("label", { class: "field" }, "Channel secret（更新時可留空）", f.secret),
         h("label", { class: "field" }, "Access token（更新時可留空）", f.token),
-        h("label", { class: "field" }, "群組啟用方式", f.joinPolicy),
-        h("label", { class: "field" }, "啟用碼", f.activationCode)),
+        h("label", { class: "field" }, "群組啟用方式（需要啟用碼時，到「啟用碼」分頁產生）", f.joinPolicy)),
       h("div", { style: "margin-top:12px" }, add)),
   );
+}
+
+async function copyText(value) {
+  try { await navigator.clipboard.writeText(value); toast("📋 已複製 Copied"); }
+  catch { toast("請長按選取後複製\n" + value); }
+}
+
+const STATUS_LABEL = { unused: "未使用", used: "已使用", expired: "已過期" };
+
+async function adminCodes() {
+  $savebar.hidden = true;
+  const [codes, channels] = await Promise.all([api("/api/admin/codes"), api("/api/admin/channels")]);
+  const f = {
+    label: h("input", { type: "text", placeholder: "例：王師傅工班" }),
+    plan: h("select", {}, h("option", { value: "free" }, "免費 Free"), h("option", { value: "pro" }, "專業版 Pro")),
+    planUntil: h("input", { type: "date" }),
+    channelId: h("select", {}, h("option", { value: "default" }, "預設官方帳號"), channels.filter((c) => c.joinPolicy === "code").map((c) => h("option", { value: c.channelId }, c.name))),
+    validDays: h("input", { type: "number", min: 0, max: 365, value: 30 }),
+    count: h("input", { type: "number", min: 1, max: 20, value: 1 }),
+  };
+  const result = h("div");
+  const make = h("button", { class: "primary", onclick: async () => {
+    make.disabled = true;
+    try {
+      const body = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]));
+      const created = await api("/api/admin/codes", { method: "POST", body: JSON.stringify(body) });
+      const until = (c) => (c.expiresAt ? "，" + c.expiresAt.slice(0, 10) + " 前有效" : "");
+      const message = (c) => "把機器人加入 LINE 群組後，在群組輸入：\n/activate " + c.code + "\n（限用一次" + until(c) + "）";
+      result.replaceChildren(h("div", { class: "card" }, h("h2", {}, "✅ 已產生，傳給客戶這段文字"),
+        created.map((c) => h("div", { class: "row" },
+          h("div", { style: "white-space:pre-line" }, message(c)),
+          h("button", { onclick: () => copyText(message(c)) }, "📋 複製")))));
+      await refresh();
+    } catch (err) { toast("⚠️ " + err.message); } finally { make.disabled = false; }
+  } }, "產生啟用碼");
+
+  const list = h("div");
+  async function refresh() {
+    const rows = (await api("/api/admin/codes")).map((c) => {
+      const revoke = c.status === "unused" ? h("button", { onclick: async (e) => {
+        const btn = e.currentTarget;
+        if (btn.dataset.armed !== "1") { btn.dataset.armed = "1"; btn.textContent = "確認作廢"; return; }
+        await api("/api/admin/codes/" + encodeURIComponent(c.code), { method: "DELETE" }).then(refresh).catch((err) => toast("⚠️ " + err.message));
+      } }, "作廢") : "";
+      return h("tr", {},
+        h("td", {}, h("code", {}, c.code), " ", c.status === "unused" ? h("button", { class: "back", style: "margin:0", onclick: () => copyText(c.code) }, "📋") : ""),
+        h("td", {}, c.label || "—"),
+        h("td", {}, c.plan === "pro" ? "Pro" + (c.planUntil ? " 到 " + c.planUntil : "") : "Free"),
+        h("td", {}, c.channelId),
+        h("td", {}, h("span", { class: c.status === "unused" ? "badge pro" : "badge" }, STATUS_LABEL[c.status])),
+        h("td", {}, c.status === "used" ? (c.usedGroup || "") + " · " + (c.usedAt || "").slice(0, 10) : c.expiresAt ? c.expiresAt.slice(0, 10) + " 到期" : "不過期"),
+        h("td", {}, revoke));
+    });
+    list.replaceChildren(rows.length
+      ? h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, ["啟用碼", "給誰", "方案", "頻道", "狀態", "使用／到期", ""].map((x) => h("th", {}, x)))), h("tbody", {}, rows)))
+      : h("p", { class: "muted" }, "還沒有啟用碼。"));
+  }
+
+  $app.replaceChildren(
+    h("h1", {}, "啟用碼 Activation codes"),
+    h("p", { class: "sub" }, "每組只能用一次，用過或過期就失效。可以帶方案，群組一啟用就套用。"),
+    adminTabs("codes"),
+    h("div", { class: "card" }, h("h2", {}, "產生新的啟用碼"),
+      h("div", { class: "grid2" },
+        h("label", { class: "field" }, "給誰（備註）", f.label),
+        h("label", { class: "field" }, "頻道", f.channelId),
+        h("label", { class: "field" }, "方案", f.plan),
+        h("label", { class: "field" }, "方案到期日（專業版）", f.planUntil),
+        h("label", { class: "field" }, "啟用碼有效天數（0 = 不過期）", f.validDays),
+        h("label", { class: "field" }, "數量（最多 20）", f.count)),
+      h("div", { style: "margin-top:12px" }, make)),
+    result,
+    h("div", { class: "card" }, h("h2", {}, "所有啟用碼"), list),
+  );
+  await refresh();
 }
 
 // ---------- start ----------
@@ -389,6 +464,8 @@ async function adminChannels() {
       await groupPage(target);
     } else if (location.hash === "#admin") {
       await adminGroups();
+    } else if (location.hash === "#codes") {
+      await adminCodes();
     } else if (location.hash === "#channels") {
       await adminChannels();
     } else {

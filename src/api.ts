@@ -6,6 +6,7 @@ import type { Env, GroupConfig, Plugin } from "./core/types";
 import { monthlyLimit, groupLanguages, USAGE_METRIC } from "./plugins/translate";
 import type { AdminRepo } from "./storage/admins";
 import type { ChannelRepo } from "./storage/channels";
+import { formatCode, type CodeRepo } from "./storage/codes";
 import type { GroupRepo, UsageMeter } from "./storage/groups";
 import type { Storage } from "./storage/types";
 import { buildReport, reportUrl, summaryText } from "./report";
@@ -22,12 +23,15 @@ import { buildReport, reportUrl, summaryText } from "./report";
  *   PUT  /api/admin/groups/:id        platform admins: plan, status, engine, quota
  *   GET|POST /api/admin/channels      platform admins: white-label channels
  *   DELETE /api/admin/channels/:id
+ *   GET|POST /api/admin/codes          platform admins: one-time activation codes
+ *   DELETE /api/admin/codes/:code      revoke an unused code
  */
 export interface ApiDeps {
   env: Env;
   groups: GroupRepo;
   admins: AdminRepo;
   channels: ChannelRepo;
+  codes: CodeRepo;
   usage: UsageMeter;
   plugins: Record<string, Plugin>;
   lineFor(channelId: string): Promise<LineApi | undefined>;
@@ -307,14 +311,13 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
         channelId: c.channelId,
         name: c.name,
         joinPolicy: c.joinPolicy,
-        hasActivationCode: !!c.activationCode,
         webhookUrl: `${deps.origin}/webhook/${c.channelId}`,
       })),
     );
   }
 
   if (req.method === "POST" && path === "/api/admin/channels") {
-    const b = await body<{ channelId?: unknown; name?: unknown; secret?: unknown; token?: unknown; joinPolicy?: unknown; activationCode?: unknown }>();
+    const b = await body<{ channelId?: unknown; name?: unknown; secret?: unknown; token?: unknown; joinPolicy?: unknown }>();
     const id = typeof b.channelId === "string" ? b.channelId.trim().toLowerCase() : "";
     if (!/^[a-z0-9-]{3,32}$/.test(id) || id === "default") throw new HttpError(400, "代號需為 3–32 個小寫英數或 -，且不能是 default");
     if (typeof b.name !== "string" || !b.name.trim()) throw new HttpError(400, "請填名稱");
@@ -323,15 +326,12 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
     const tokenIn = typeof b.token === "string" ? b.token.trim() : "";
     if (!existing && (!secretIn || !tokenIn)) throw new HttpError(400, "新頻道需要 Channel secret 與 access token");
     const joinPolicy = b.joinPolicy === "code" ? "code" : "open";
-    const activationCode = typeof b.activationCode === "string" && b.activationCode.trim() ? b.activationCode.trim() : existing?.activationCode;
-    if (joinPolicy === "code" && !activationCode) throw new HttpError(400, "需要啟用碼時請填啟用碼");
     await deps.channels.put({
       channelId: id,
       name: b.name.trim(),
       secretEnc: secretIn ? await encrypt(secret, secretIn) : existing!.secretEnc,
       tokenEnc: tokenIn ? await encrypt(secret, tokenIn) : existing!.tokenEnc,
       joinPolicy,
-      activationCode,
     });
     return json({ channelId: id, webhookUrl: `${deps.origin}/webhook/${id}` });
   }
@@ -342,8 +342,57 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
     return json({ ok: true });
   }
 
+  if (req.method === "GET" && path === "/api/admin/codes") {
+    const [codes, groups] = await Promise.all([deps.codes.list(), deps.groups.listAll()]);
+    const names = new Map(groups.map((g) => [g.groupId, g.name]));
+    const now = new Date().toISOString();
+    return json(
+      codes.map((c) => ({
+        code: formatCode(c.code),
+        label: c.label,
+        channelId: c.channelId,
+        plan: c.plan,
+        planUntil: c.planUntil,
+        expiresAt: c.expiresAt,
+        createdAt: c.createdAt,
+        status: c.usedAt ? "used" : c.expiresAt && c.expiresAt <= now ? "expired" : "unused",
+        usedAt: c.usedAt,
+        usedGroup: c.usedGroup && (names.get(c.usedGroup) ?? c.usedGroup),
+      })),
+    );
+  }
+
+  if (req.method === "POST" && path === "/api/admin/codes") {
+    const b = await body<{ label?: unknown; channelId?: unknown; plan?: unknown; planUntil?: unknown; validDays?: unknown; count?: unknown }>();
+    const channelId = typeof b.channelId === "string" && b.channelId ? b.channelId : "default";
+    if (channelId !== "default" && !(await deps.channels.get(channelId))) throw new HttpError(400, "找不到這個頻道 Unknown channel");
+    const plan = typeof b.plan === "string" && b.plan in PLANS ? b.plan : "free";
+    const planUntil = typeof b.planUntil === "string" && b.planUntil ? b.planUntil : undefined;
+    if (planUntil && !/^\d{4}-\d{2}-\d{2}$/.test(planUntil)) throw new HttpError(400, "方案到期日格式 YYYY-MM-DD");
+    const days = b.validDays === undefined || b.validDays === "" ? 30 : Number(b.validDays);
+    if (!Number.isInteger(days) || days < 0 || days > 365) throw new HttpError(400, "有效天數需為 0–365（0 = 不過期）");
+    const count = b.count === undefined ? 1 : Number(b.count);
+    if (!Number.isInteger(count) || count < 1 || count > 20) throw new HttpError(400, "一次最多產生 20 組");
+    const expiresAt = days ? new Date(Date.now() + days * 86400 * 1000).toISOString() : undefined;
+    const label = typeof b.label === "string" ? b.label.trim().slice(0, 100) : "";
+    const created = [];
+    for (let i = 0; i < count; i++) {
+      created.push(await deps.codes.create({ label, channelId, plan, planUntil, expiresAt, createdBy: (await verifyMe(req, secret))?.sub }));
+    }
+    return json(created.map((c) => ({ code: formatCode(c.code), expiresAt: c.expiresAt, plan: c.plan, planUntil: c.planUntil })));
+  }
+
+  m = path.match(/^\/api\/admin\/codes\/([^/]+)$/);
+  if (m && req.method === "DELETE") {
+    if (!(await deps.codes.revoke(decodeURIComponent(m[1]!)))) throw new HttpError(400, "只能作廢還沒使用的啟用碼 Only unused codes can be revoked");
+    return json({ ok: true });
+  }
+
   throw new HttpError(404, "not found");
 }
+
+const verifyMe = (req: Request, secret: string) =>
+  verifyToken<{ sub: string }>(secret, "session", req.headers.get("Authorization")?.replace(/^Bearer /, ""));
 
 /** Verify a LIFF / LINE Login ID token against LINE's endpoint. */
 export async function verifyLineIdToken(idToken: string, clientId: string | undefined, f: typeof fetch = (i, init) => fetch(i, init)) {

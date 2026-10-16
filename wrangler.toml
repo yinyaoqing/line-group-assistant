@@ -21,7 +21,6 @@ crons = ["0 0 * * 1"]
 #   GOOGLE_TRANSLATE_API_KEY     (translate engine "google")
 #   DEEPL_API_KEY                (translate engine "deepl")
 #   ANTHROPIC_API_KEY            (translate engine "claude")
-#   ACTIVATION_CODE              (lets a group turn the bot on with /activate <code>)
 #   APP_SECRET                   (signs settings links and sessions; encrypts white-label credentials)
 #   PLATFORM_ADMINS              (comma-separated LINE Login user IDs allowed into the admin page)
 
