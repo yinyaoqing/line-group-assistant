@@ -181,6 +181,7 @@ npx wrangler d1 execute line-group-assistant --remote --command "SELECT * FROM u
 | `/settings` | 管理員取得設定頁連結 |
 | `/admin`、`/admin add @成員`、`/admin remove @成員` | 查看、新增、移除管理員（移除限擁有者） |
 | `/help` | 使用說明：依功能分組，每個指令附範例 |
+| `/menu` | 功能選單卡片：每個功能一個大按鈕。**電腦版 LINE 不會顯示輸入框上方的快速按鈕**（那是 LINE 手機版才有的功能），電腦版請用這張卡片 |
 | `/template`、`/template tool` | 指令範本卡片：按「📋 複製」→ 貼到輸入框 → 改內容送出；加功能名稱只看該功能的範本。舊版 LINE 不支援複製按鈕時，改送一則一則可長按複製的訊息 |
 | `/t <文字>` | 翻譯這段文字（`trigger: "command"` 時的唯一翻譯方式） |
 | `/translate off`、`/translate on` | 關閉／開啟本群組的自動翻譯，關閉時 `/t` 仍可用；狀態存在試算表的 `translate` 分頁 |
@@ -188,7 +189,8 @@ npx wrangler d1 execute line-group-assistant --remote --command "SELECT * FROM u
 | `/todo`（或 `/task`） | 未完成任務卡片，每筆都有「開始」「完成」按鈕 |
 | `/add <內容> [@名字] [10/20]`（或 `/task add …`） | 新增任務，例：`/add 買早餐 @JOJO 10/17`。`@名字`（或 `owner:名字`）指定負責人，未指定時預設為發言者；結尾的日期（`10/17`、`10-17`、`2026/10/17`，或 `due:10/17`）當作期限 |
 | `/task start <編號>` | 標記為進行中（通常直接點按鈕） |
-| `/task done <編號>` | 標記為完成（通常直接點按鈕） |
+| `/task done <編號> <現況>` | 完成並回報現況，例：`/task done 3 租到 2 台線鋸，週五下午可取`。點卡片的「完成」按鈕時沒有現況，機器人會請按的人在 10 分鐘內直接回覆一則訊息當作回報；沒回報前任務不會完成 |
+| `/task fail <編號> [原因]` | 標記為失敗，可附原因，例：`/task fail 3 下雨延期`。失敗和完成一樣不再出現在 `/todo`；`/task start <編號>` 可重新開始 |
 | `/task assign <編號> <名字>` | 更換負責人 |
 | `/tool`、`/material` | 工具／材料卡片：每項顯示數量，附「−1」「+1」按鈕 |
 | `/tool <名稱> [數量]`、`/material <名稱> [數量]` | 新增或累加，例：`/tool 線鋸 1`、`/material 螺絲 100`；負數減少，不填數量就是 +1。同名（不分大小寫，或與譯名相同）會疊加 |

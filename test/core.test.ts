@@ -184,7 +184,7 @@ describe("tasks plugin", () => {
     expect(textOf(replies[0]?.[0])).toContain("#1 去農場看木料 [未開始] 👤Joseph ⏰10/22");
     await handleEvent(msg("/task start 1"), deps);
     expect(textOf(replies[1]?.[0])).toContain("[進行中]");
-    await handleEvent(msg("/task done 1"), deps);
+    await handleEvent(msg("/task done 1 已看完木料"), deps);
     await handleEvent(msg("/task"), deps);
     expect(textOf(replies[3]?.[0])).toContain("沒有未完成");
   });
@@ -194,7 +194,7 @@ describe("tasks plugin", () => {
     await handleEvent(msg("/add 買早餐 @JOJO 10/17"), deps);
     const added = replies[0]?.[0] as { text: string; quickReply: { items: { action: { text: string } }[] } };
     expect(added.text).toContain("#1 買早餐 [未開始] 👤JOJO ⏰10/17");
-    expect(added.quickReply.items.map((i) => i.action.text)).toEqual(["/task start 1", "/task done 1", "/todo", "/template", "/help"]);
+    expect(added.quickReply.items.map((i) => i.action.text)).toEqual(["/task start 1", "/task done 1", "/todo", "/menu", "/template", "/help"]);
 
     await handleEvent(msg("／Todo"), deps);
     const card = replies[1]?.[0] as { type: string; altText: string };
@@ -203,7 +203,7 @@ describe("tasks plugin", () => {
     const sent = JSON.stringify(card).match(/"text":"\/task (?:start|done) \d+"/g);
     expect(sent).toEqual(['"text":"/task start 1"', '"text":"/task done 1"']);
 
-    await handleEvent(msg("/task Done 1"), deps);
+    await handleEvent(msg("/task Done 1 OK"), deps);
     expect(textOf(replies[2]?.[0])).toContain("[完成]");
   });
 

@@ -9,8 +9,14 @@ import { backfill, flagged, translateLabel, withTranslations } from "../translat
  *   /task                                   list open tasks
  *   /task add <title> [@name|owner:name] [10/20|due:10/20]
  *   /task start <id>
- *   /task done <id>
+ *   /task done <id> <report>                done, with a report of how it went; without
+ *                                           one, the next plain message from the same
+ *                                           member within 10 minutes is the report
+ *   /task fail <id> [reason]                mark as failed; reason optional
  *   /task assign <id> <name>
+ *
+ * Done and failed tasks are closed: they leave /todo and the digest. Starting a
+ * failed task again reopens it.
  *
  * Phone shortcuts: /add … is /task add …, /todo is /task. The open-task list is a
  * card with Start/Done buttons per task, so most updates are a tap, not typing.
@@ -23,12 +29,16 @@ import { backfill, flagged, translateLabel, withTranslations } from "../translat
  * parse the command, read/write a table through ctx.storage, return reply messages.
  */
 const TABLE = "tasks";
-const STATUS = { todo: "未開始", doing: "進行中", done: "完成" } as const;
+export const STATUS = { todo: "未開始", doing: "進行中", done: "完成", failed: "失敗" } as const;
 
-const SUB: Record<string, "add" | "start" | "done" | "assign" | "list"> = {
+/** Done and failed tasks are closed; everything else is still open. */
+export const isOpen = (r: Row) => r.status !== STATUS.done && r.status !== STATUS.failed;
+
+const SUB: Record<string, "add" | "start" | "done" | "fail" | "assign" | "list"> = {
   add: "add",
   start: "start",
   done: "done",
+  fail: "fail",
   assign: "assign",
   list: "list",
 };
@@ -42,15 +52,29 @@ export const tasks: Plugin = {
     title: "📋 任務 Tasks",
     lines: [
       "/add 買早餐 @JOJO 10/17　新增（@負責人、日期可省略）",
-      "/todo　看清單，點「開始」「完成」",
+      "/todo　看清單，點「開始」「完成」「失敗」",
+      "點「完成」後直接回覆現況，例：租到 2 台，週五可取",
+      "/task done 1 租到 2 台，週五可取　一次完成並回報",
+      "/task fail 1 下雨延期　標記 1 號失敗（原因可省略）",
       "/task assign 1 JOJO　把 1 號任務改給 JOJO",
     ],
   },
   templates: [
     { label: "新增任務", text: "/add 工作內容 @負責人 10/20", note: "@負責人、日期可以刪掉" },
+    { label: "完成並回報現況", text: "/task done 任務編號 現況說明", note: "例：租到 2 台線鋸，週五下午可以取" },
+    { label: "標記失敗", text: "/task fail 任務編號 原因", note: "原因可以刪掉" },
     { label: "改負責人", text: "/task assign 任務編號 名字" },
   ],
   quickReplies: [LIST],
+
+  /** A plain message from someone who just tapped Done is their report: complete the task with it. */
+  async onMessage(input, ctx) {
+    if (!input.userId) return;
+    const pending = await pendingFor(ctx, input.userId, input.event.timestamp);
+    if (!pending) return;
+    pendingCache.delete(ctx.group.groupId);
+    return [await complete(ctx, pending, input.text.trim(), input.event.timestamp)];
+  },
 
   async onCommand(input, ctx) {
     // "/add …" and "/todo" are shorthands for "/task add …" and "/task".
@@ -62,7 +86,7 @@ export const tasks: Plugin = {
     switch (sub) {
       case "list":
       case undefined: {
-        const open = await backfill((await db.list(TABLE)).filter((r) => r.status !== STATUS.done), "title", TABLE, db, ctx);
+        const open = await backfill((await db.list(TABLE)).filter(isOpen), "title", TABLE, db, ctx);
         return [open.length ? taskList(open) : text("✅ 目前沒有未完成的任務 No open tasks\n新增 Add: /add 內容 @負責人 10/17")];
       }
       case "add": {
@@ -80,22 +104,49 @@ export const tasks: Plugin = {
         });
         return [withQuickReply(text(`➕ 已新增 Added\n${fmt(row)}`), [startOf(row), doneOf(row)])];
       }
-      case "start":
-      case "done": {
+      case "start": {
         const id = restArgs[0];
-        if (!id) return [text(`用法 Usage: /task ${sub} <編號 id>\n或點 /todo 清單裡的按鈕 Or tap a button in /todo`)];
+        if (!id) return [text("用法 Usage: /task start <編號 id>\n或點 /todo 清單裡的按鈕 Or tap a button in /todo")];
+        // Starting again (e.g. after a failure) clears the failure reason.
+        const row = await db.update(TABLE, id, { status: STATUS.doing, failReason: "" });
+        if (!row) return [text(`找不到任務 #${id} / Task #${id} not found`)];
+        return [withQuickReply(text(`▶️ ${fmt(row)}`), [doneOf(row)])];
+      }
+      case "done": {
+        const [id, ...words] = restArgs;
+        if (!id) return [text("用法 Usage: /task done <編號 id> <現況 report>\n例 e.g. /task done 3 租到 2 台，週五可取")];
+        const row = (await db.list(TABLE)).find((r) => r.id === id);
+        if (!row) return [text(`找不到任務 #${id} / Task #${id} not found`)];
+        if (row.status === STATUS.done) return [text(`✅ ${fmt(row)}\n這個任務已經完成了 Already done.`)];
+        const report = words.join(" ").trim();
+        if (report) return [await complete(ctx, row, report, input.event.timestamp)];
+        // No report yet: wait for the member's next plain message as the report.
+        if (!input.userId) return [text("請附上現況 Please add a report: /task done " + id + " <現況>")];
+        await db.update(TABLE, id, { reportBy: input.userId, reportUntil: new Date(input.event.timestamp + REPORT_WINDOW_MS).toISOString() });
+        pendingCache.delete(ctx.group.groupId);
+        const who = (await ctx.displayName(input.userId)) ?? "";
+        return [
+          text(
+            `✍️ 請 ${who} 直接回覆一則訊息，說明 #${id} 的現況（10 分鐘內）。\n例如：租到 2 台線鋸，週五下午可以取。\n\nReply with a message describing the outcome; it completes the task.\n也可以打 Or: /task done ${id} 現況`,
+          ),
+        ];
+      }
+      case "fail": {
+        const [id, ...why] = restArgs;
+        if (!id) return [text("用法 Usage: /task fail <編號 id> [原因 reason]\n例 e.g. /task fail 3 下雨延期")];
         const row = await db.update(TABLE, id, {
-          status: sub === "start" ? STATUS.doing : STATUS.done,
-          ...(sub === "done" ? { doneAt: new Date(input.event.timestamp).toISOString() } : {}),
+          status: STATUS.failed,
+          failedAt: new Date(input.event.timestamp).toISOString(),
+          failReason: why.join(" "),
         });
         if (!row) return [text(`找不到任務 #${id} / Task #${id} not found`)];
-        const reply = text(`${sub === "done" ? "✅" : "▶️"} ${fmt(row)}`);
-        return [sub === "start" ? withQuickReply(reply, [doneOf(row)]) : reply];
+        return [withQuickReply(text(`❌ ${fmt(row)}`), [restartOf(row)])];
       }
       case "assign": {
         const [id, ...who] = restArgs;
         if (!id || !who.length) return [text("用法 Usage: /task assign <編號 id> <名字 name>")];
-        const row = await db.update(TABLE, id, { owner: who.join(" ") });
+        // "@JOJO" (typed or picked from LINE's mention list) is stored as "JOJO", like /add does.
+        const row = await db.update(TABLE, id, { owner: who.join(" ").replace(/^[@＠]/, "") });
         return [text(row ? `👤 ${fmt(row)}` : `找不到任務 #${id} / Task #${id} not found`)];
       }
     }
@@ -104,15 +155,56 @@ export const tasks: Plugin = {
   async onSchedule(_cron, ctx) {
     if (ctx.settings.digest !== true || !ctx.plan.digest) return;
     const all = await ctx.storage.list(TABLE);
-    const open = all.filter((r) => r.status !== STATUS.done);
+    const open = all.filter(isOpen);
     if (!open.length) return;
-    const done = all.length - open.length;
-    await ctx.push([text(`🗓 每週進度 Weekly progress\n完成 Done ${done}／共 Total ${all.length}\n\n${open.map(fmt).join("\n")}`)]);
+    const done = all.filter((r) => r.status === STATUS.done).length;
+    const failed = all.filter((r) => r.status === STATUS.failed).length;
+    const closed = `完成 Done ${done}${failed ? `、失敗 Failed ${failed}` : ""}`;
+    await ctx.push([text(`🗓 每週進度 Weekly progress\n${closed}／共 Total ${all.length}\n\n${open.map(fmt).join("\n")}`)]);
   },
 };
 
+/** How long after tapping Done the member's next message counts as the report. */
+export const REPORT_WINDOW_MS = 10 * 60 * 1000;
+
+type Ctx = Parameters<NonNullable<Plugin["onCommand"]>>[1];
+
+/** Mark a task done with its report, clearing any wait for one. */
+async function complete(ctx: Ctx, row: Row, report: string, timestamp: number): Promise<LineMessage> {
+  const done = await ctx.storage.update(TABLE, row.id, {
+    status: STATUS.done,
+    doneAt: new Date(timestamp).toISOString(),
+    report,
+    reportBy: "",
+    reportUntil: "",
+  });
+  return text(`✅ ${fmt(done ?? row)}\n📝 回報 Report：${report}`);
+}
+
+/**
+ * Tasks waiting for a report, per group, re-read at most every few seconds so a
+ * busy chat does not read the task table on every message. The isolate that
+ * records a wait clears its cache; others catch up within PENDING_TTL_MS.
+ */
+const PENDING_TTL_MS = 5 * 1000;
+const pendingCache = new Map<string, { rows: Row[]; at: number }>();
+
+async function pendingFor(ctx: Ctx, userId: string, now: number): Promise<Row | undefined> {
+  let hit = pendingCache.get(ctx.group.groupId);
+  if (!hit || Date.now() - hit.at > PENDING_TTL_MS) {
+    const rows = (await ctx.storage.list(TABLE)).filter((r) => r.reportBy && isOpen(r));
+    hit = { rows, at: Date.now() };
+    pendingCache.set(ctx.group.groupId, hit);
+  }
+  return hit.rows
+    .filter((r) => r.reportBy === userId && new Date(r.reportUntil ?? 0).getTime() > now)
+    .sort((a, b) => (b.reportUntil ?? "").localeCompare(a.reportUntil ?? ""))[0];
+}
+
 const startOf = (r: Row): QuickItem => ({ label: `▶️ 開始 #${r.id}`, text: `/task start ${r.id}` });
 const doneOf = (r: Row): QuickItem => ({ label: `✅ 完成 #${r.id}`, text: `/task done ${r.id}` });
+const failOf = (r: Row): QuickItem => ({ label: `❌ 失敗 #${r.id}`, text: `/task fail ${r.id}` });
+const restartOf = (r: Row): QuickItem => ({ label: `🔄 重新開始 #${r.id}`, text: `/task start ${r.id}` });
 
 /** Rows shown in the card: LINE caps a bubble at 30 KB, and long lists are hard to read on a phone. */
 const MAX_CARD_ROWS = 10;
@@ -125,11 +217,13 @@ function taskList(open: Row[]): LineMessage {
     const buttons = [
       ...(r.status === STATUS.todo ? [{ item: startOf(r), style: "secondary" }] : []),
       { item: doneOf(r), style: "primary" },
-    ].map(({ item, style }) => ({
+      { item: failOf(r), style: "link", color: "#cc3333" },
+    ].map(({ item, style, color }) => ({
       type: "button",
       action: action({ label: item.label.replace(/ #\d+$/, ""), text: item.text }),
       style,
       height: "sm",
+      ...(color ? { color } : {}),
     }));
     return {
       type: "box",
@@ -165,6 +259,7 @@ function fmt(r: Row): string {
   const parts = [`#${r.id} ${withTranslations(r.title ?? "", r.i18n)}`, `[${r.status}]`];
   if (r.owner) parts.push(`👤${r.owner}`);
   if (r.due) parts.push(`⏰${r.due}`);
+  if (r.status === STATUS.failed && r.failReason) parts.push(`（${r.failReason}）`);
   return parts.join(" ");
 }
 

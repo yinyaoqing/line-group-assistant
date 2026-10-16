@@ -1,5 +1,6 @@
 import { signToken, verifyToken } from "./core/crypto";
 import type { GroupConfig } from "./core/types";
+import { isOpen, STATUS } from "./plugins/tasks";
 import { translationsOf } from "./plugins/translate/terms";
 import type { Row, Storage } from "./storage/types";
 
@@ -21,8 +22,6 @@ export async function reportUrl(secret: string, origin: string, groupId: string)
 
 export const verifyReportToken = (secret: string, token: string) => verifyToken<{ g: string }>(secret, "report", token);
 
-const TASK_DONE = "完成";
-const TASK_DOING = "進行中";
 
 /** "2026-10-16T02:30:00Z" → "2026-10-16 10:30" in Taipei time. */
 export const taipeiTime = (iso: string | undefined) => {
@@ -67,7 +66,7 @@ export interface ReportData {
   tasks: Row[];
   /** Only the count lists the group has turned on. */
   counters: CounterSection[];
-  summary: { total: number; done: number; doing: number; todo: number; overdue: number };
+  summary: { total: number; done: number; failed: number; doing: number; todo: number; overdue: number };
 }
 
 export async function buildReport(group: GroupConfig, storage: Storage, now = new Date()): Promise<ReportData> {
@@ -79,7 +78,7 @@ export async function buildReport(group: GroupConfig, storage: Storage, now = ne
       return { ...c, rows, kinds: rows.length, total: rows.reduce((n, r) => n + (Number(r.qty) || 0), 0) };
     }),
   );
-  const isOverdue = (r: Row) => r.status !== TASK_DONE && (dueDate(r.due, now)?.getTime() ?? Infinity) < now.getTime();
+  const isOverdue = (r: Row) => isOpen(r) && (dueDate(r.due, now)?.getTime() ?? Infinity) < now.getTime();
   return {
     group,
     generatedAt: now.toISOString(),
@@ -87,9 +86,10 @@ export async function buildReport(group: GroupConfig, storage: Storage, now = ne
     counters,
     summary: {
       total: tasks.length,
-      done: tasks.filter((r) => r.status === TASK_DONE).length,
-      doing: tasks.filter((r) => r.status === TASK_DOING).length,
-      todo: tasks.filter((r) => r.status !== TASK_DONE && r.status !== TASK_DOING).length,
+      done: tasks.filter((r) => r.status === STATUS.done).length,
+      failed: tasks.filter((r) => r.status === STATUS.failed).length,
+      doing: tasks.filter((r) => r.status === STATUS.doing).length,
+      todo: tasks.filter((r) => isOpen(r) && r.status !== STATUS.doing).length,
       overdue: tasks.filter(isOverdue).length,
     },
   };
@@ -100,7 +100,7 @@ export function summaryText(d: ReportData): string {
   const s = d.summary;
   const lines = [`📊 報表 Report：${d.group.name ?? "群組"}`];
   if (d.group.plugins.includes("tasks")) {
-    lines.push(`📋 任務 ${s.total}：完成 ${s.done}、進行中 ${s.doing}、未開始 ${s.todo}${s.overdue ? `、⚠️ 逾期 ${s.overdue}` : ""}`);
+    lines.push(`📋 任務 ${s.total}：完成 ${s.done}${s.failed ? `、失敗 ${s.failed}` : ""}、進行中 ${s.doing}、未開始 ${s.todo}${s.overdue ? `、⚠️ 逾期 ${s.overdue}` : ""}`);
   }
   for (const c of d.counters) lines.push(`${c.title.split(" ")[0]} ${c.noun} ${c.kinds} 項，共 ${c.total} 件`);
   return lines.join("\n");
@@ -117,7 +117,8 @@ const TASK_COLUMNS: [string, (r: Row) => string][] = [
   ["期限", (r) => r.due ?? ""],
   ["建立者", (r) => r.createdBy ?? ""],
   ["建立時間", (r) => taipeiTime(r.createdAt)],
-  ["完成時間", (r) => taipeiTime(r.doneAt)],
+  ["完成回報／失敗原因", (r) => (r.status === STATUS.failed ? r.failReason ?? "" : r.status === STATUS.done ? r.report ?? "" : "")],
+  ["結束時間", (r) => taipeiTime(r.status === STATUS.failed ? r.failedAt : r.status === STATUS.done ? r.doneAt : undefined)],
 ];
 
 const ITEM_COLUMNS: [string, (r: Row) => string][] = [
@@ -159,7 +160,8 @@ export function reportHtml(d: ReportData, token: string): string {
   const s = d.summary;
   const name = esc(d.group.name ?? "群組");
   const now = new Date(d.generatedAt);
-  const overdue = (r: Row) => (r.status !== TASK_DONE && (dueDate(r.due, now)?.getTime() ?? Infinity) < now.getTime() ? "late" : r.status === TASK_DONE ? "done" : "");
+  const taskClass = (r: Row) =>
+    r.status === STATUS.failed ? "failed" : r.status === STATUS.done ? "done" : (dueDate(r.due, now)?.getTime() ?? Infinity) < now.getTime() ? "late" : "";
   const hasTasks = d.group.plugins.includes("tasks");
   const stat = (label: string, value: number, cls = "") => `<div class="stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
   const base = `/report/${encodeURIComponent(token)}`;
@@ -179,7 +181,7 @@ export function reportHtml(d: ReportData, token: string): string {
   .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(76px,1fr)); gap:8px; margin-bottom:12px; }
   .stat { border:1px solid var(--line); border-radius:10px; padding:10px; text-align:center; }
   .stat b { display:block; font-size:22px; } .stat span { color:var(--muted); font-size:12px; }
-  .stat.warn { border-color:var(--warn); color:var(--warn); }
+  .stat.warn { border-color:var(--warn); color:var(--warn); } .stat.bad { border-color:#dc2626; color:#dc2626; }
   .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
   .btn { display:inline-block; padding:9px 14px; border-radius:10px; background:var(--accent); color:#fff; text-decoration:none; font-weight:600; border:0; font:inherit; cursor:pointer; }
   .btn.ghost { background:transparent; color:var(--text); border:1px solid var(--line); font-weight:400; }
@@ -188,7 +190,7 @@ export function reportHtml(d: ReportData, token: string): string {
   th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
   th { color:var(--muted); font-weight:500; }
   table.tasks td:nth-child(2), table.tasks td:nth-child(3), table.counts td:nth-child(1), table.counts td:nth-child(2) { white-space:normal; min-width:7em; }
-  tr.late td { background:var(--warn-bg); } tr.done td { color:var(--muted); } tr.empty td:nth-child(3) { color:#dc2626; font-weight:600; }
+  tr.late td { background:var(--warn-bg); } tr.done td { color:var(--muted); } tr.failed td { color:#dc2626; } tr.empty td:nth-child(3) { color:#dc2626; font-weight:600; }
   @media print {
     :root { --bg:#fff; --card:#fff; --text:#000; --muted:#555; --line:#ccc; color-scheme: light; }
     .actions, .noprint { display:none !important; } .card { border:0; padding:0; } main { max-width:none; padding:0; }
@@ -200,8 +202,8 @@ export function reportHtml(d: ReportData, token: string): string {
   ${
     hasTasks
       ? `<div class="card"><h2>📋 任務 Tasks</h2>
-    <div class="stats">${stat("全部", s.total)}${stat("完成", s.done)}${stat("進行中", s.doing)}${stat("未開始", s.todo)}${stat("逾期", s.overdue, s.overdue ? "warn" : "")}</div>
-    ${table("tasks", d.tasks, TASK_COLUMNS, overdue)}
+    <div class="stats">${stat("全部", s.total)}${stat("完成", s.done)}${stat("失敗", s.failed, s.failed ? "bad" : "")}${stat("進行中", s.doing)}${stat("未開始", s.todo)}${stat("逾期", s.overdue, s.overdue ? "warn" : "")}</div>
+    ${table("tasks", d.tasks, TASK_COLUMNS, taskClass)}
     <div class="actions"><a class="btn" href="${base}/tasks.csv">⬇ 下載任務 CSV</a></div></div>`
       : ""
   }

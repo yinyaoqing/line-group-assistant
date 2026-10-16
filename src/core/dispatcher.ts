@@ -77,13 +77,56 @@ export function parseCommand(input: string): { name: string; args: string[]; res
 
 const HELP: QuickItem = { label: "❓ 說明 Help", text: "/help" };
 const TEMPLATES: QuickItem = { label: "📝 範本 Templates", text: "/template" };
+const MENU: QuickItem = { label: "📱 選單 Menu", text: "/menu" };
+
+/**
+ * /menu: every feature as a big button. Unlike quick replies, which LINE shows
+ * only on phones, card buttons also work in LINE for PC and Mac.
+ */
+export function menuCard(active: Plugin[]): LineMessage {
+  const items: QuickItem[] = [
+    ...active.flatMap((p) => p.quickReplies ?? []),
+    { label: "📊 報表 Report", text: "/report" },
+    TEMPLATES,
+    { label: "⚙️ 設定 Settings", text: "/settings" },
+    HELP,
+  ];
+  const button = (i: QuickItem) => ({
+    type: "button",
+    style: "secondary",
+    height: "sm",
+    flex: 1,
+    action: { type: "message", label: i.label.slice(0, 20), text: i.text },
+  });
+  const rows = [];
+  for (let i = 0; i < items.length; i += 2) {
+    rows.push({ type: "box", layout: "horizontal", spacing: "sm", contents: items.slice(i, i + 2).map(button) });
+  }
+  return {
+    type: "flex",
+    altText: `📱 選單 Menu\n${items.map((i) => `${i.label}：${i.text}`).join("\n")}`.slice(0, 400),
+    contents: {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        contents: [
+          { type: "text", text: "📱 功能選單 Menu", weight: "bold" },
+          { type: "text", text: "點按鈕即可操作。電腦版 LINE 看不到下方快速按鈕時，輸入 /menu 叫出這張卡片。", size: "xs", color: "#888888", wrap: true },
+          ...rows,
+        ],
+      },
+    },
+  };
+}
 
 /** /help: how to get around first, then one section per active plugin, then the core commands. */
 export function helpText(active: Plugin[]): string {
   const sections = active.filter((p) => p.help).map((p) => [p.help!.title, ...p.help!.lines.map((l) => `・${l}`)].join("\n"));
   return [
     "📖 使用說明 How to use",
-    "👆 最快：點輸入框上方的按鈕\n📝 要打字：輸入 /template 拿範本，按「複製」→ 貼到輸入框 → 改內容 → 送出",
+    "👆 最快：點輸入框上方的按鈕（電腦版 LINE 沒有這排按鈕，請輸入 /menu）\n📝 要打字：輸入 /template 拿範本，按「複製」→ 貼到輸入框 → 改內容 → 送出",
     ...sections,
     "📊 /report　匯出報表（Excel／PDF）\n⚙️ /settings　設定頁（管理員）\n👥 /admin　管理員名單",
   ].join("\n\n");
@@ -180,26 +223,30 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   if (group?.status !== "active") return;
   if (event.type !== "message" || event.message?.type !== "text" || !event.message.text) return;
 
-  if (pre?.name === "settings") return send(await settingsLink(group, userId, deps));
-  if (pre?.name === "admin") return reply(await adminCommand(group, pre.args, userId, event, deps));
-  if (pre?.name === "report") return send(await reportReply(group, deps));
-
   const raw = event.message.text;
   const cmd = pre;
   const replies: LineMessage[] = [];
   const active = group.plugins.map((n) => deps.plugins[n]).filter((p): p is Plugin => !!p);
-  const quick = [...active.flatMap((p) => p.quickReplies ?? []), TEMPLATES, HELP];
+  const quick = [...active.flatMap((p) => p.quickReplies ?? []), MENU, TEMPLATES, HELP];
+  // Every reply in an active group carries the quick reply buttons (shown on phones only).
+  const sendQ = (messages: LineMessage[]) =>
+    send(messages.map((m, i) => (i === messages.length - 1 ? withQuickReply(m, quick) : m)));
+
+  if (pre?.name === "settings") return sendQ(await settingsLink(group, userId, deps));
+  if (pre?.name === "admin") return sendQ([text(await adminCommand(group, pre.args, userId, event, deps))]);
+  if (pre?.name === "report") return sendQ(await reportReply(group, deps));
+  if (pre?.name === "menu") return sendQ([menuCard(active)]);
 
   if (cmd?.name === "template") {
     const t = templateCard(active, cmd.args[0]);
-    if (!t) return reply("這個功能沒有範本。輸入 /template 看全部。");
+    if (!t) return sendQ([text("這個功能沒有範本。輸入 /template 看全部。")]);
     try {
-      return await send([withQuickReply(t.card, quick)]);
+      return await sendQ([t.card]);
     } catch (err) {
       // Older LINE versions reject the clipboard action: send each template as its own
       // message instead, which can be long-pressed and copied.
       console.error("template card failed, sending plain text", err);
-      return send([text("長按下面的訊息 → 複製 → 貼上修改後送出"), ...t.templates.slice(0, 4).map((x) => text(x.text))]);
+      return sendQ([text("長按下面的訊息 → 複製 → 貼上修改後送出"), ...t.templates.slice(0, 4).map((x) => text(x.text))]);
     }
   }
 

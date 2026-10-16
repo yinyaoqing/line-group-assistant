@@ -325,7 +325,7 @@ describe("quick replies", () => {
     const spy = vi.spyOn(engines, "google").mockResolvedValue({ text: "Good morning" });
     await handleEvent(msg("大家早安"), w.deps);
     const reply = w.replies[0]?.[0] as { quickReply: { items: { action: { text: string } }[] } };
-    expect(reply.quickReply.items.map((i) => i.action.text)).toEqual(["/translate", "/todo", "/tool", "/material", "/template", "/help"]);
+    expect(reply.quickReply.items.map((i) => i.action.text)).toEqual(["/translate", "/todo", "/tool", "/material", "/menu", "/template", "/help"]);
     spy.mockRestore();
   });
 });
@@ -336,7 +336,7 @@ describe("reports", () => {
     const w = world([active({ name: "工班", plugins: ["tasks", "tools", "materials"] })]);
     await handleEvent(msg("/add 買早餐 @JOJO 1/2"), w.deps); // long overdue
     await handleEvent(msg("/add 載木料"), w.deps);
-    await handleEvent(msg("/task done 2"), w.deps);
+    await handleEvent(msg("/task done 2 已載到工地"), w.deps);
     await handleEvent(msg("/tool 線鋸 3"), w.deps);
     await handleEvent(msg('/material =SUM(A1) 1'), w.deps);
 
@@ -423,7 +423,7 @@ describe("help and templates", () => {
     };
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     await handleEvent(msg("/template"), w.deps);
-    expect(w.replies[0]?.map(textOf)).toEqual(["長按下面的訊息 → 複製 → 貼上修改後送出", "/add 工作內容 @負責人 10/20", "/task assign 任務編號 名字"]);
+    expect(w.replies[0]?.map(textOf)).toEqual(["長按下面的訊息 → 複製 → 貼上修改後送出", "/add 工作內容 @負責人 10/20", "/task done 任務編號 現況說明", "/task fail 任務編號 原因", "/task assign 任務編號 名字"]);
     err.mockRestore();
   });
 });
@@ -502,5 +502,113 @@ describe("tools vs materials", () => {
     await handleEvent(msg("/item 線鋸 1"), w.deps);
     expect(textOf(w.replies[4]?.[0])).toContain("/tool 工具");
     expect(await db.list("items")).toEqual([]);
+  });
+});
+
+describe("failed tasks", () => {
+  it("can be failed with a reason, leave /todo, and be started again", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    await handleEvent(msg("/add 搭鷹架 10/20"), w.deps);
+    await handleEvent(msg("/add 買螺絲"), w.deps);
+    await handleEvent(msg("/task fail 1 下雨延期"), w.deps);
+    const failed = w.replies[2]?.[0] as { text: string; quickReply: { items: { action: { text: string } }[] } };
+    expect(failed.text).toBe("❌ #1 搭鷹架 [失敗] 👤Joseph ⏰10/20 （下雨延期）");
+    expect(failed.quickReply.items[0]!.action.text).toBe("/task start 1");
+
+    await handleEvent(msg("/todo"), w.deps);
+    const card = w.replies[3]?.[0] as { altText: string };
+    expect(card.altText).not.toContain("搭鷹架");
+    expect(JSON.stringify(card)).toContain('"text":"/task fail 2"');
+
+    await handleEvent(msg("/task start 1"), w.deps);
+    expect(textOf(w.replies[4]?.[0])).toBe("▶️ #1 搭鷹架 [進行中] 👤Joseph ⏰10/20");
+    const row = (await w.deps.storageFor(active()).list("tasks")).find((r) => r.id === "1");
+    expect(row?.failReason).toBe("");
+  });
+
+  it("are counted and explained in the report", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    await handleEvent(msg("/add 搭鷹架 1/2"), w.deps); // overdue, but failed tasks are not "overdue"
+    await handleEvent(msg("/add 買螺絲"), w.deps);
+    await handleEvent(msg("/task fail 1 下雨延期"), w.deps);
+    const { buildReport, summaryText, tasksCsv, reportHtml } = await import("../src/report");
+    const data = await buildReport((await w.repo.get("Cg"))!, w.deps.storageFor(active()));
+    expect(data.summary).toMatchObject({ total: 2, done: 0, failed: 1, doing: 0, todo: 1, overdue: 0 });
+    expect(summaryText(data)).toContain("任務 2：完成 0、失敗 1、進行中 0、未開始 1");
+    const csv = tasksCsv(data);
+    expect(csv).toContain("失敗原因,結束時間");
+    expect(csv).toMatch(/1,搭鷹架,,失敗,Joseph,1\/2,Joseph,[^,]*,下雨延期,\d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
+    expect(reportHtml(data, "t")).toContain('<tr class="failed">');
+  });
+});
+
+describe("menu and always-on quick replies", () => {
+  it("/menu is a card of buttons for every active feature, usable on LINE for PC", async () => {
+    const w = world([active({ plugins: ["translate", "tasks", "tools", "materials"] })]);
+    await handleEvent(msg("/menu"), w.deps);
+    const card = w.replies[0]?.[0] as { type: string };
+    expect(card.type).toBe("flex");
+    const sends = JSON.stringify(card).match(/"type":"message","label":"[^"]+","text":"([^"]+)"/g)!.map((s) => s.replace(/.*"text":"/, "").replace(/"$/, ""));
+    expect(sends.slice(0, 8)).toEqual(["/translate", "/todo", "/tool", "/material", "/report", "/template", "/settings", "/help"]);
+  });
+
+  it("rides on /report, /settings and /admin replies too", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    for (const c of ["/report", "/settings", "/admin"]) await handleEvent(msg(c), w.deps);
+    for (const r of w.replies) expect((r.at(-1) as { quickReply?: unknown }).quickReply).toBeTruthy();
+  });
+});
+
+describe("/task assign", () => {
+  it("drops the @ of a mention, like /add", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    await handleEvent(msg("/add 搭鷹架"), w.deps);
+    await handleEvent(msg("/task assign 1 @繪文"), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toBe("👤 #1 搭鷹架 [未開始] 👤繪文");
+  });
+});
+
+describe("done needs a report", () => {
+  it("tapping Done waits for the member's next message and stores it as the report", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    await handleEvent(msg("/add 去租工具"), w.deps);
+    await handleEvent(msg("/task done 1"), w.deps); // what the card button sends
+    expect(textOf(w.replies[1]?.[0])).toContain("請 Joseph 直接回覆一則訊息");
+    await handleEvent(msg("/todo"), w.deps); // still open until reported
+    expect((w.replies[2]?.[0] as { altText: string }).altText).toContain("去租工具");
+
+    await handleEvent(msg("今天天氣好", "U2"), w.deps); // someone else talking is not the report
+    await handleEvent(msg("租到 2 台線鋸，週五下午可以取"), w.deps);
+    expect(textOf(w.replies.at(-1)?.[0])).toBe("✅ #1 去租工具 [完成] 👤Joseph\n📝 回報 Report：租到 2 台線鋸，週五下午可以取");
+    const row = (await w.deps.storageFor(active()).list("tasks"))[0]!;
+    expect(row).toMatchObject({ status: "完成", report: "租到 2 台線鋸，週五下午可以取", reportBy: "" });
+
+    const count = w.replies.length;
+    await handleEvent(msg("謝謝大家"), w.deps); // the wait is over: an ordinary message again
+    expect(w.replies.length).toBe(count);
+  });
+
+  it("completes in one go with /task done <id> <report>, and ignores late replies", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    await handleEvent(msg("/add 去租工具"), w.deps);
+    await handleEvent(msg("/task done 1 租到 2 台，週五可取"), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toContain("📝 回報 Report：租到 2 台，週五可取");
+
+    await handleEvent(msg("/add 買螺絲"), w.deps);
+    await handleEvent(msg("/task done 2"), w.deps);
+    const late = { ...msg("買到了"), timestamp: Date.now() + 11 * 60 * 1000 }; // after the 10-minute window
+    await handleEvent(late, w.deps);
+    const row = (await w.deps.storageFor(active()).list("tasks")).find((r) => r.id === "2")!;
+    expect(row.status).toBe("未開始");
+  });
+
+  it("shows the report in the report page and CSV", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    await handleEvent(msg("/add 去租工具"), w.deps);
+    await handleEvent(msg("/task done 1 租到 2 台"), w.deps);
+    const { buildReport, tasksCsv } = await import("../src/report");
+    const csv = tasksCsv(await buildReport((await w.repo.get("Cg"))!, w.deps.storageFor(active())));
+    expect(csv).toContain("完成回報／失敗原因");
+    expect(csv).toContain(",租到 2 台,");
   });
 });
