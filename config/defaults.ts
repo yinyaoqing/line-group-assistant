@@ -9,7 +9,7 @@ export const defaultGroup = (groupId: string, channelId = "default"): GroupConfi
   groupId,
   channelId,
   plan: "free",
-  plugins: ["translate", "tasks", "items"],
+  plugins: ["translate", "tasks", "tools", "materials"],
   storage: { type: "d1" },
   settings: {
     translate: {

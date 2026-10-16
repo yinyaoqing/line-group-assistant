@@ -8,7 +8,8 @@
 | --- | --- |
 | `translate` | 每則訊息自動翻成群組選的其他語言（中文、英文、越南文、印尼文、泰文、菲律賓文、日文）。引擎可選 Google、DeepL、Claude |
 | `tasks` | 任務與進度：`/add`、`/todo`、開始／完成按鈕，每週一自動推播進度摘要（選用） |
-| `items` | 物品數量表：`/item 線鋸 1` 新增或累加、卡片上按 ±1、`/item set` 改數量 |
+| `tools` | 工具數量表：`/tool 線鋸 1` 新增或累加、卡片上按 ±1、`/tool set` 改數量 |
+| `materials` | 材料數量表：`/material 螺絲 100`，用法同工具（也可打 `/mat`） |
 
 `tasks` 同時是撰寫新外掛的範本，排班、工具借還、材料運送、缺料回報都可以照同樣模式寫。
 
@@ -34,8 +35,9 @@ src/
     channels.ts         白牌頻道
   plugins/
     index.ts            外掛註冊表
-    translate/          翻譯外掛
+    translate/          翻譯外掛（terms.ts：任務與工具名稱的翻譯）
     tasks/              任務外掛
+    counter/            數量表外掛範本，產生 tools（/tool）與 materials（/material）
 config/defaults.ts      新群組的預設外掛與設定
 config/plans.ts         方案、價格與額度
 config/languages.ts     支援的翻譯語言
@@ -179,7 +181,7 @@ npx wrangler d1 execute line-group-assistant --remote --command "SELECT * FROM u
 | `/settings` | 管理員取得設定頁連結 |
 | `/admin`、`/admin add @成員`、`/admin remove @成員` | 查看、新增、移除管理員（移除限擁有者） |
 | `/help` | 使用說明：依功能分組，每個指令附範例 |
-| `/template`、`/template item` | 指令範本卡片：按「📋 複製」→ 貼到輸入框 → 改內容送出；加功能名稱只看該功能的範本。舊版 LINE 不支援複製按鈕時，改送一則一則可長按複製的訊息 |
+| `/template`、`/template tool` | 指令範本卡片：按「📋 複製」→ 貼到輸入框 → 改內容送出；加功能名稱只看該功能的範本。舊版 LINE 不支援複製按鈕時，改送一則一則可長按複製的訊息 |
 | `/t <文字>` | 翻譯這段文字（`trigger: "command"` 時的唯一翻譯方式） |
 | `/translate off`、`/translate on` | 關閉／開啟本群組的自動翻譯，關閉時 `/t` 仍可用；狀態存在試算表的 `translate` 分頁 |
 | `/translate` | 顯示自動翻譯目前是開啟或關閉，附一鍵切換按鈕 |
@@ -188,10 +190,10 @@ npx wrangler d1 execute line-group-assistant --remote --command "SELECT * FROM u
 | `/task start <編號>` | 標記為進行中（通常直接點按鈕） |
 | `/task done <編號>` | 標記為完成（通常直接點按鈕） |
 | `/task assign <編號> <名字>` | 更換負責人 |
-| `/item` | 物品卡片：每項顯示數量，附「−1」「+1」按鈕 |
-| `/item <名稱> [數量]` | 新增或累加，例：`/item 線鋸 1`；負數減少（`/item 線鋸 -1`），不填數量就是 +1。同名（不分大小寫）會疊加 |
-| `/item set <名稱> <數量>`、`/item del <名稱>` | 直接設定數量、從清單移除 |
-| `/report` | 任務與物品的摘要，附 24 小時有效的報表連結：統計、明細、下載 CSV（Excel 可開）、列印成 PDF |
+| `/tool`、`/material` | 工具／材料卡片：每項顯示數量，附「−1」「+1」按鈕 |
+| `/tool <名稱> [數量]`、`/material <名稱> [數量]` | 新增或累加，例：`/tool 線鋸 1`、`/material 螺絲 100`；負數減少，不填數量就是 +1。同名（不分大小寫，或與譯名相同）會疊加 |
+| `/tool set`、`/tool del`（材料同） | 直接設定數量、從清單移除 |
+| `/report` | 任務、工具、材料的摘要，附 24 小時有效的報表連結：統計、明細、下載 CSV（Excel 可開）、列印成 PDF |
 
 指令一律使用英文；任務內容、名字可以用中文。
 
@@ -200,22 +202,25 @@ npx wrangler d1 execute line-group-assistant --remote --command "SELECT * FROM u
 ## 寫一個新外掛
 
 ```ts
-// src/plugins/tools/index.ts
+// src/plugins/roster/index.ts
 import type { Plugin } from "../../core/types";
 import { text } from "../../core/types";
 
-export const tools: Plugin = {
-  name: "tools",
-  commands: ["tool"],
+export const roster: Plugin = {
+  name: "roster",
+  commands: ["shift"],
+  help: { title: "🗓 排班 Roster", lines: ["/shift 10/20　看那天誰上班"] },
   async onCommand(input, ctx) {
-    const rows = await ctx.storage.list("tools");          // 讀「tools」分頁
-    const hit = rows.find((r) => r.name === input.args[0]);
-    return [text(hit ? `${hit.name} 在 ${hit.holder} 手上` : "找不到這個工具")];
+    const rows = await ctx.storage.list("roster");         // 讀「roster」表
+    const today = rows.filter((r) => r.date === input.args[0]);
+    return [text(today.length ? today.map((r) => `${r.date} ${r.name}`).join("\n") : "那天沒有排班")];
   },
 };
 ```
 
-然後在 `src/plugins/index.ts` 註冊，並在群組設定的 `plugins` 裡加上 `"tools"`。
+然後在 `src/plugins/index.ts` 註冊，並在群組的 `plugins` 加上 `"roster"`（設定頁的功能開關也要加一列）。
+
+只是要另一種「數量表」（例如「設備」），不用寫新外掛：在 [src/plugins/counter/index.ts](src/plugins/counter/index.ts) 用 `counterPlugin({...})` 再產生一個即可。
 
 Plugin 介面有三個可選的 hook：
 

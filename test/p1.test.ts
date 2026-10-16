@@ -272,13 +272,13 @@ describe("settings API", () => {
   });
 });
 
-describe("items plugin", () => {
-  const withItems = () => world([active({ plugins: ["items"] })]);
+describe("tools and materials", () => {
+  const withItems = () => world([active({ plugins: ["tools"] })]);
   const qtyOf = async (w: ReturnType<typeof world>, name: string) =>
-    (await w.deps.storageFor(active()).list("items")).find((r) => r.name === name && r.removed !== "1")?.qty;
+    (await w.deps.storageFor(active()).list("tools")).find((r) => r.name === name && r.removed !== "1")?.qty;
 
   it("parses a trailing count, keeping numbers that are part of the name", async () => {
-    const { parseItem } = await import("../src/plugins/items");
+    const { parseItem } = await import("../src/plugins/counter");
     expect(parseItem("線鋸 1")).toEqual({ name: "線鋸", qty: 1 });
     expect(parseItem("電動 線鋸 -2")).toEqual({ name: "電動 線鋸", qty: -2 });
     expect(parseItem("木料 2x4")).toEqual({ name: "木料 2x4" });
@@ -287,45 +287,45 @@ describe("items plugin", () => {
 
   it("adds, stacks repeats case-insensitively, subtracts, sets and removes", async () => {
     const w = withItems();
-    await handleEvent(msg("/item 線鋸 1"), w.deps);
-    expect(textOf(w.replies[0]?.[0])).toBe("📦 新增 Added：線鋸 × 1");
-    await handleEvent(msg("/item 線鋸 2"), w.deps);
-    expect(textOf(w.replies[1]?.[0])).toBe("📦 線鋸：1 → 3");
-    await handleEvent(msg("/item Saw"), w.deps); // no number = +1
-    await handleEvent(msg("/item saw"), w.deps);
+    await handleEvent(msg("/tool 線鋸 1"), w.deps);
+    expect(textOf(w.replies[0]?.[0])).toBe("🔧 新增 Added：線鋸 × 1");
+    await handleEvent(msg("/tool 線鋸 2"), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toBe("🔧 線鋸：1 → 3");
+    await handleEvent(msg("/tool Saw"), w.deps); // no number = +1
+    await handleEvent(msg("/tool saw"), w.deps);
     expect(await qtyOf(w, "Saw")).toBe("2");
 
-    await handleEvent(msg("/item 線鋸 -5"), w.deps);
+    await handleEvent(msg("/tool 線鋸 -5"), w.deps);
     expect(textOf(w.replies[4]?.[0])).toContain("只剩 3");
-    await handleEvent(msg("/item set 線鋸 10"), w.deps);
+    await handleEvent(msg("/tool set 線鋸 10"), w.deps);
     expect(await qtyOf(w, "線鋸")).toBe("10");
 
-    await handleEvent(msg("/item del 線鋸"), w.deps);
+    await handleEvent(msg("/tool del 線鋸"), w.deps);
     expect(await qtyOf(w, "線鋸")).toBeUndefined();
-    await handleEvent(msg("/item 線鋸 1"), w.deps); // comes back on the same row, from 0
-    const rows = await w.deps.storageFor(active()).list("items");
+    await handleEvent(msg("/tool 線鋸 1"), w.deps); // comes back on the same row, from 0
+    const rows = await w.deps.storageFor(active()).list("tools");
     expect(rows.filter((r) => r.name === "線鋸")).toHaveLength(1);
     expect(await qtyOf(w, "線鋸")).toBe("1");
   });
 
   it("shows a card with −1/+1 buttons per item", async () => {
     const w = withItems();
-    await handleEvent(msg("/item 線鋸 3"), w.deps);
-    await handleEvent(msg("/item"), w.deps);
+    await handleEvent(msg("/tool 線鋸 3"), w.deps);
+    await handleEvent(msg("/tool"), w.deps);
     const card = w.replies[1]?.[0] as { type: string; altText: string };
     expect(card.type).toBe("flex");
     expect(card.altText).toContain("線鋸 × 3");
-    expect(JSON.stringify(card).match(/"text":"\/item 線鋸 [+-]1"/g)).toEqual(['"text":"/item 線鋸 -1"', '"text":"/item 線鋸 +1"']);
+    expect(JSON.stringify(card).match(/"text":"\/tool 線鋸 [+-]1"/g)).toEqual(['"text":"/tool 線鋸 -1"', '"text":"/tool 線鋸 +1"']);
   });
 });
 
 describe("quick replies", () => {
   it("ride on every reply, translations included, so the buttons stay in reach", async () => {
-    const w = world([active({ plugins: ["translate", "tasks", "items"] })]);
+    const w = world([active({ plugins: ["translate", "tasks", "tools", "materials"] })]);
     const spy = vi.spyOn(engines, "google").mockResolvedValue({ text: "Good morning" });
     await handleEvent(msg("大家早安"), w.deps);
     const reply = w.replies[0]?.[0] as { quickReply: { items: { action: { text: string } }[] } };
-    expect(reply.quickReply.items.map((i) => i.action.text)).toEqual(["/translate", "/todo", "/item", "/template", "/help"]);
+    expect(reply.quickReply.items.map((i) => i.action.text)).toEqual(["/translate", "/todo", "/tool", "/material", "/template", "/help"]);
     spy.mockRestore();
   });
 });
@@ -333,17 +333,18 @@ describe("quick replies", () => {
 describe("reports", () => {
   it("/report replies with a summary and a signed link that serves the page and CSVs", async () => {
     const { handleReport } = await import("../src/report");
-    const w = world([active({ name: "工班", plugins: ["tasks", "items"] })]);
+    const w = world([active({ name: "工班", plugins: ["tasks", "tools", "materials"] })]);
     await handleEvent(msg("/add 買早餐 @JOJO 1/2"), w.deps); // long overdue
     await handleEvent(msg("/add 載木料"), w.deps);
     await handleEvent(msg("/task done 2"), w.deps);
-    await handleEvent(msg("/item 線鋸 3"), w.deps);
-    await handleEvent(msg('/item =SUM(A1) 1'), w.deps);
+    await handleEvent(msg("/tool 線鋸 3"), w.deps);
+    await handleEvent(msg('/material =SUM(A1) 1'), w.deps);
 
     await handleEvent(msg("/report"), w.deps);
     const tpl = w.replies[5]?.[0] as { altText: string; template: { actions: { uri: string }[] } };
     expect(tpl.altText).toContain("任務 2：完成 1、進行中 0、未開始 1、⚠️ 逾期 1");
-    expect(tpl.altText).toContain("物品 2 項，共 4 件");
+    expect(tpl.altText).toContain("🔧 工具 1 項，共 3 件");
+    expect(tpl.altText).toContain("🧱 材料 1 項，共 1 件");
     const url = new URL(tpl.template.actions[0]!.uri);
     expect(url.origin).toBe("https://bot.example");
     expect(url.searchParams.get("openExternalBrowser")).toBe("1");
@@ -360,9 +361,14 @@ describe("reports", () => {
     const csv = new TextDecoder().decode(bytes);
     expect(csv.startsWith("編號,標題,翻譯,狀態,負責人,期限")).toBe(true);
     expect(csv).toContain("1,買早餐,,未開始,JOJO,1/2"); // tasks-only group: no translations
-    const items = await (await handleReport(url.pathname + "/items.csv", SECRET, load))!;
-    expect(items.headers.get("Content-Disposition")).toMatch(/attachment; filename="items-\d{4}-\d{2}-\d{2}\.csv"/);
-    expect(await items.text()).toContain("'=SUM(A1),,1"); // formula injection neutralised
+    const tools = await (await handleReport(url.pathname + "/tools.csv", SECRET, load))!;
+    expect(tools.headers.get("Content-Disposition")).toMatch(/attachment; filename="tools-\d{4}-\d{2}-\d{2}\.csv"/);
+    expect(await tools.text()).toContain("線鋸,,3");
+    const materials = await (await handleReport(url.pathname + "/materials.csv", SECRET, load))!;
+    expect(await materials.text()).toContain("'=SUM(A1),,1"); // formula injection neutralised
+    expect(html).toContain("🔧 工具 Tools");
+    expect(html).toContain("🧱 材料 Materials");
+    expect((await handleReport(url.pathname + "/items.csv", SECRET, load))).toBeUndefined();
 
     expect((await handleReport(url.pathname, "other-secret", load))!.status).toBe(410);
     expect(await handleReport("/elsewhere", SECRET, load)).toBeUndefined();
@@ -379,27 +385,28 @@ describe("reports", () => {
 
 describe("help and templates", () => {
   it("/help explains the buttons and templates, then one section per active feature", async () => {
-    const w = world([active({ plugins: ["translate", "items"] })]);
+    const w = world([active({ plugins: ["translate", "tools"] })]);
     await handleEvent(msg("/help"), w.deps);
     const help = textOf(w.replies[0]?.[0]);
     expect(help).toContain("點輸入框上方的按鈕");
     expect(help).toContain("/template");
     expect(help).toContain("🌐 翻譯 Translate");
-    expect(help).toContain("・/item 線鋸 1　新增，或在原數量上加 1");
+    expect(help).toContain("・/tool 線鋸 1　新增，或在原數量上加 1");
     expect(help).not.toContain("📋 任務 Tasks"); // tasks is off in this group
   });
 
   it("/template sends a card with a copy button per template, filtered by feature", async () => {
-    const w = world([active({ plugins: ["translate", "tasks", "items"] })]);
+    const w = world([active({ plugins: ["translate", "tasks", "tools", "materials"] })]);
     await handleEvent(msg("/template"), w.deps);
     const card = JSON.stringify(w.replies[0]?.[0]);
     expect(card).toContain('"type":"clipboard"');
     expect(card).toContain('"clipboardText":"/add 工作內容 @負責人 10/20"');
-    expect(card).toContain('"clipboardText":"/item 物品名稱 1"');
+    expect(card).toContain('"clipboardText":"/tool 工具名稱 1"');
 
-    await handleEvent(msg("/template item"), w.deps);
+    await handleEvent(msg("/template material"), w.deps);
     const items = JSON.stringify(w.replies[1]?.[0]);
-    expect(items).toContain("/item set 物品名稱 5");
+    expect(items).toContain("/material set 材料名稱 5");
+    expect(items).not.toContain('"clipboardText":"/tool');
     expect(items).not.toContain("/add 工作內容");
   });
 
@@ -423,7 +430,7 @@ describe("help and templates", () => {
 
 describe("translated tasks and items", () => {
   const pro = () =>
-    world([active({ plan: "pro", plugins: ["translate", "tasks", "items"], settings: { translate: { engine: "google", languages: ["zh-TW", "en", "vi"] } } })]);
+    world([active({ plan: "pro", plugins: ["translate", "tasks", "tools", "materials"], settings: { translate: { engine: "google", languages: ["zh-TW", "en", "vi"] } } })]);
   const fake = (dict: Record<string, Record<string, string>>) =>
     vi.spyOn(engines, "google").mockImplementation(async (t, target) => ({ text: dict[t]?.[target] ?? t }));
 
@@ -444,11 +451,11 @@ describe("translated tasks and items", () => {
   it("stacks an item typed in another language onto the same row", async () => {
     const w = pro();
     const spy = fake({ 線鋸: { en: "Jigsaw", vi: "Cưa lọng" } });
-    await handleEvent(msg("/item 線鋸 2"), w.deps);
-    expect(textOf(w.replies[0]?.[0])).toBe("📦 新增 Added：線鋸 / Jigsaw / Cưa lọng × 2");
-    await handleEvent(msg("/item jigsaw 1"), w.deps);
-    expect(textOf(w.replies[1]?.[0])).toBe("📦 線鋸 / Jigsaw / Cưa lọng：2 → 3");
-    const rows = await w.deps.storageFor(active()).list("items");
+    await handleEvent(msg("/tool 線鋸 2"), w.deps);
+    expect(textOf(w.replies[0]?.[0])).toBe("🔧 新增 Added：線鋸 / Jigsaw / Cưa lọng × 2");
+    await handleEvent(msg("/tool jigsaw 1"), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toBe("🔧 線鋸 / Jigsaw / Cưa lọng：2 → 3");
+    const rows = await w.deps.storageFor(active()).list("tools");
     expect(rows).toHaveLength(1);
     spy.mockRestore();
   });
@@ -457,13 +464,13 @@ describe("translated tasks and items", () => {
     const w = pro();
     const db = w.deps.storageFor(active());
     await db.append("tasks", { title: "Zace 載木料", status: "未開始" });
-    await db.append("items", { name: "Zace", qty: "1" });
+    await db.append("tools", { name: "Zace", qty: "1" });
     const spy = fake({ "Zace 載木料": { en: "Zace hauls timber", vi: "Zace chở gỗ" } }); // "Zace" comes back unchanged
     await handleEvent(msg("/todo"), w.deps);
     expect(JSON.stringify(w.replies[0]?.[0])).toContain("🇺🇸 Zace hauls timber");
-    await handleEvent(msg("/item"), w.deps);
+    await handleEvent(msg("/tool"), w.deps);
     const calls = spy.mock.calls.length;
-    await handleEvent(msg("/item"), w.deps); // Zace is remembered as untranslatable
+    await handleEvent(msg("/tool"), w.deps); // Zace is remembered as untranslatable
     await handleEvent(msg("/todo"), w.deps);
     expect(spy.mock.calls.length).toBe(calls);
     spy.mockRestore();
@@ -476,5 +483,24 @@ describe("translated tasks and items", () => {
     expect(spy).not.toHaveBeenCalled();
     expect(textOf(w.replies[0]?.[0])).toContain("#1 買早餐 [未開始]");
     spy.mockRestore();
+  });
+});
+
+describe("tools vs materials", () => {
+  it("keeps separate lists, and points the old /item command to the new ones", async () => {
+    const w = world([active({ plugins: ["tools", "materials"] })]);
+    await handleEvent(msg("/tool 線鋸 1"), w.deps);
+    await handleEvent(msg("/material 螺絲 100"), w.deps);
+    await handleEvent(msg("/mat 螺絲 -20"), w.deps);
+    expect(textOf(w.replies[2]?.[0])).toBe("🧱 螺絲：100 → 80");
+    const db = w.deps.storageFor(active());
+    expect((await db.list("tools")).map((r) => r.name)).toEqual(["線鋸"]);
+    expect((await db.list("materials")).map((r) => [r.name, r.qty])).toEqual([["螺絲", "80"]]);
+
+    await handleEvent(msg("/material"), w.deps);
+    expect(JSON.stringify(w.replies[3]?.[0])).toContain('"text":"/material 螺絲 +1"');
+    await handleEvent(msg("/item 線鋸 1"), w.deps);
+    expect(textOf(w.replies[4]?.[0])).toContain("/tool 工具");
+    expect(await db.list("items")).toEqual([]);
   });
 });

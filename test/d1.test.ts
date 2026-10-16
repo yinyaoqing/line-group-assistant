@@ -51,7 +51,7 @@ describe("D1GroupRepo", () => {
       name: "工班（新名稱）",
       channelId: "default",
       plan: "free",
-      plugins: ["translate", "tasks", "items"],
+      plugins: ["translate", "tasks", "tools", "materials"],
       storage: { type: "d1" },
       settings: { translate: { languages: ["zh-TW", "vi"] } },
     });

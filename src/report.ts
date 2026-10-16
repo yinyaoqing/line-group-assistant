@@ -9,7 +9,7 @@ import type { Row, Storage } from "./storage/types";
  *
  *   GET /report/<token>             the page
  *   GET /report/<token>/tasks.csv   tasks, UTF-8 with BOM so Excel reads Chinese
- *   GET /report/<token>/items.csv   items
+ *   GET /report/<token>/tools.csv   tools; materials.csv likewise
  */
 export const REPORT_TTL_SECONDS = 24 * 3600;
 
@@ -43,32 +43,54 @@ export function dueDate(due: string | undefined, now = new Date()): Date | undef
   return Number.isNaN(end.getTime()) ? undefined : end;
 }
 
+/** Count lists in the report, by plugin (= table) name, in display order. */
+const COUNTERS = [
+  { key: "tools", title: "🔧 工具 Tools", noun: "工具" },
+  { key: "materials", title: "🧱 材料 Materials", noun: "材料" },
+] as const;
+
+export type CounterKey = (typeof COUNTERS)[number]["key"];
+
+export interface CounterSection {
+  key: CounterKey;
+  title: string;
+  noun: string;
+  rows: Row[];
+  /** Number of entries and the sum of their counts. */
+  kinds: number;
+  total: number;
+}
+
 export interface ReportData {
   group: GroupConfig;
   generatedAt: string;
   tasks: Row[];
-  items: Row[];
-  summary: { total: number; done: number; doing: number; todo: number; overdue: number; itemKinds: number; itemTotal: number };
+  /** Only the count lists the group has turned on. */
+  counters: CounterSection[];
+  summary: { total: number; done: number; doing: number; todo: number; overdue: number };
 }
 
 export async function buildReport(group: GroupConfig, storage: Storage, now = new Date()): Promise<ReportData> {
   const plugins = new Set(group.plugins);
   const tasks = plugins.has("tasks") ? await storage.list("tasks") : [];
-  const items = plugins.has("items") ? (await storage.list("items")).filter((r) => r.removed !== "1") : [];
+  const counters = await Promise.all(
+    COUNTERS.filter((c) => plugins.has(c.key)).map(async (c) => {
+      const rows = (await storage.list(c.key)).filter((r) => r.removed !== "1").sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", "zh-Hant"));
+      return { ...c, rows, kinds: rows.length, total: rows.reduce((n, r) => n + (Number(r.qty) || 0), 0) };
+    }),
+  );
   const isOverdue = (r: Row) => r.status !== TASK_DONE && (dueDate(r.due, now)?.getTime() ?? Infinity) < now.getTime();
   return {
     group,
     generatedAt: now.toISOString(),
     tasks,
-    items: [...items].sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", "zh-Hant")),
+    counters,
     summary: {
       total: tasks.length,
       done: tasks.filter((r) => r.status === TASK_DONE).length,
       doing: tasks.filter((r) => r.status === TASK_DOING).length,
       todo: tasks.filter((r) => r.status !== TASK_DONE && r.status !== TASK_DOING).length,
       overdue: tasks.filter(isOverdue).length,
-      itemKinds: items.length,
-      itemTotal: items.reduce((n, r) => n + (Number(r.qty) || 0), 0),
     },
   };
 }
@@ -80,7 +102,7 @@ export function summaryText(d: ReportData): string {
   if (d.group.plugins.includes("tasks")) {
     lines.push(`📋 任務 ${s.total}：完成 ${s.done}、進行中 ${s.doing}、未開始 ${s.todo}${s.overdue ? `、⚠️ 逾期 ${s.overdue}` : ""}`);
   }
-  if (d.group.plugins.includes("items")) lines.push(`📦 物品 ${s.itemKinds} 項，共 ${s.itemTotal} 件`);
+  for (const c of d.counters) lines.push(`${c.title.split(" ")[0]} ${c.noun} ${c.kinds} 項，共 ${c.total} 件`);
   return lines.join("\n");
 }
 
@@ -120,13 +142,13 @@ export function toCsv(rows: Row[], columns: [string, (r: Row) => string][]): str
 }
 
 export const tasksCsv = (d: ReportData) => toCsv(d.tasks, TASK_COLUMNS);
-export const itemsCsv = (d: ReportData) => toCsv(d.items, ITEM_COLUMNS);
+export const counterCsv = (d: ReportData, key: CounterKey) => toCsv(d.counters.find((c) => c.key === key)?.rows ?? [], ITEM_COLUMNS);
 
 // ---------- HTML ----------
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-function table(kind: "tasks" | "items", rows: Row[], columns: [string, (r: Row) => string][], rowClass: (r: Row) => string = () => ""): string {
+function table(kind: "tasks" | "counts", rows: Row[], columns: [string, (r: Row) => string][], rowClass: (r: Row) => string = () => ""): string {
   if (!rows.length) return `<p class="muted">沒有資料 No data</p>`;
   const head = columns.map(([h]) => `<th>${esc(h)}</th>`).join("");
   const body = rows.map((r) => `<tr class="${rowClass(r)}">${columns.map(([, get]) => `<td>${esc(get(r))}</td>`).join("")}</tr>`).join("");
@@ -139,7 +161,6 @@ export function reportHtml(d: ReportData, token: string): string {
   const now = new Date(d.generatedAt);
   const overdue = (r: Row) => (r.status !== TASK_DONE && (dueDate(r.due, now)?.getTime() ?? Infinity) < now.getTime() ? "late" : r.status === TASK_DONE ? "done" : "");
   const hasTasks = d.group.plugins.includes("tasks");
-  const hasItems = d.group.plugins.includes("items");
   const stat = (label: string, value: number, cls = "") => `<div class="stat ${cls}"><b>${value}</b><span>${label}</span></div>`;
   const base = `/report/${encodeURIComponent(token)}`;
 
@@ -166,7 +187,7 @@ export function reportHtml(d: ReportData, token: string): string {
   table { border-collapse:collapse; width:100%; font-size:13px; }
   th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); white-space:nowrap; }
   th { color:var(--muted); font-weight:500; }
-  table.tasks td:nth-child(2), table.tasks td:nth-child(3), table.items td:nth-child(1), table.items td:nth-child(2) { white-space:normal; min-width:7em; }
+  table.tasks td:nth-child(2), table.tasks td:nth-child(3), table.counts td:nth-child(1), table.counts td:nth-child(2) { white-space:normal; min-width:7em; }
   tr.late td { background:var(--warn-bg); } tr.done td { color:var(--muted); } tr.empty td:nth-child(3) { color:#dc2626; font-weight:600; }
   @media print {
     :root { --bg:#fff; --card:#fff; --text:#000; --muted:#555; --line:#ccc; color-scheme: light; }
@@ -184,26 +205,26 @@ export function reportHtml(d: ReportData, token: string): string {
     <div class="actions"><a class="btn" href="${base}/tasks.csv">⬇ 下載任務 CSV</a></div></div>`
       : ""
   }
-  ${
-    hasItems
-      ? `<div class="card"><h2>📦 物品 Items</h2>
-    <div class="stats">${stat("品項", s.itemKinds)}${stat("總件數", s.itemTotal)}</div>
-    ${table("items", d.items, ITEM_COLUMNS, (r) => (Number(r.qty) > 0 ? "" : "empty"))}
-    <div class="actions"><a class="btn" href="${base}/items.csv">⬇ 下載物品 CSV</a></div></div>`
-      : ""
-  }
-  ${!hasTasks && !hasItems ? `<div class="card"><p class="muted">這個群組沒有開啟任務或物品功能。</p></div>` : ""}
+  ${d.counters
+    .map(
+      (c) => `<div class="card"><h2>${esc(c.title)}</h2>
+    <div class="stats">${stat("品項", c.kinds)}${stat("總件數", c.total)}</div>
+    ${table("counts", c.rows, ITEM_COLUMNS, (r) => (Number(r.qty) > 0 ? "" : "empty"))}
+    <div class="actions"><a class="btn" href="${base}/${c.key}.csv">⬇ 下載${esc(c.noun)} CSV</a></div></div>`,
+    )
+    .join("\n  ")}
+  ${!hasTasks && !d.counters.length ? `<div class="card"><p class="muted">這個群組沒有開啟任務、工具或材料功能。</p></div>` : ""}
   <div class="actions"><button class="btn ghost" onclick="window.print()">🖨 列印／存成 PDF</button></div>
 </main></body></html>`;
 }
 
-/** Serve /report/<token>[/tasks.csv|/items.csv]; undefined if the path is not a report path. */
+/** Serve /report/<token>[/tasks.csv|/tools.csv|/materials.csv]; undefined if the path is not a report path. */
 export async function handleReport(
   path: string,
   secret: string | undefined,
   load: (groupId: string) => Promise<{ group: GroupConfig; storage: Storage } | undefined>,
 ): Promise<Response | undefined> {
-  const m = path.match(/^\/report\/([^/]+)(?:\/(tasks|items)\.csv)?$/);
+  const m = path.match(/^\/report\/([^/]+)(?:\/(tasks|tools|materials)\.csv)?$/);
   if (!m) return undefined;
   const page = (msg: string, status: number) =>
     new Response(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><p style="font:16px sans-serif;padding:24px">${esc(msg)}</p>`, {
@@ -219,7 +240,7 @@ export async function handleReport(
   const data = await buildReport(found.group, found.storage);
   const headers = { "Cache-Control": "no-store", "X-Robots-Tag": "noindex", "Referrer-Policy": "no-referrer" };
   if (m[2]) {
-    const csv = m[2] === "tasks" ? tasksCsv(data) : itemsCsv(data);
+    const csv = m[2] === "tasks" ? tasksCsv(data) : counterCsv(data, m[2] as CounterKey);
     const day = taipeiTime(data.generatedAt).slice(0, 10);
     const file = `${m[2]}-${day}.csv`;
     return new Response(csv, {

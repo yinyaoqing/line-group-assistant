@@ -224,7 +224,7 @@ describe("group registration and activation", () => {
   it("registers an invited group as pending and ignores it until activated", async () => {
     const { deps, replies, groups } = setup({}, { ACTIVATION_CODE: "open-sesame" });
     await handleEvent(join("Cnew"), deps);
-    expect(await groups.get("Cnew")).toMatchObject({ status: "pending", name: "工班群組", plugins: ["translate", "tasks", "items"] });
+    expect(await groups.get("Cnew")).toMatchObject({ status: "pending", name: "工班群組", plugins: ["translate", "tasks", "tools", "materials"] });
     expect(textOf(replies[0]?.[0])).toContain("/activate");
 
     await handleEvent(msg("/todo", "Cnew"), deps);

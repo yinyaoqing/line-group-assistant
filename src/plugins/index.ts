@@ -1,6 +1,6 @@
 import type { Plugin } from "../core/types";
 import { translate } from "./translate";
-import { items } from "./items";
+import { materials, tools } from "./counter";
 import { tasks } from "./tasks";
 
 /**
@@ -11,5 +11,6 @@ import { tasks } from "./tasks";
 export const plugins: Record<string, Plugin> = {
   [translate.name]: translate,
   [tasks.name]: tasks,
-  [items.name]: items,
+  [tools.name]: tools,
+  [materials.name]: materials,
 };
