@@ -2,6 +2,12 @@ name = "line-group-assistant"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
+# The settings page (src/app/index.html) is bundled as a string.
+[[rules]]
+type = "Text"
+globs = ["**/*.html"]
+fallthrough = true
+
 # 每週一 08:00（台北時間）= 週一 00:00 UTC，用來推播每週摘要。
 # Weekly digest: Monday 08:00 Taipei = Monday 00:00 UTC.
 [triggers]
@@ -15,3 +21,21 @@ crons = ["0 0 * * 1"]
 #   GOOGLE_TRANSLATE_API_KEY     (translate engine "google")
 #   DEEPL_API_KEY                (translate engine "deepl")
 #   ANTHROPIC_API_KEY            (translate engine "claude")
+#   ACTIVATION_CODE              (lets a group turn the bot on with /activate <code>)
+#   APP_SECRET                   (signs settings links and sessions; encrypts white-label credentials)
+#   PLATFORM_ADMINS              (comma-separated LINE Login user IDs allowed into the admin page)
+
+# 設定頁（LIFF）：在 LINE Developers 建立 LINE Login channel 與 LIFF app 後填入。
+# Settings page (LIFF): fill in after creating a LINE Login channel and LIFF app.
+[vars]
+LIFF_ID = "2012043075-FcoKHkDN"
+LOGIN_CHANNEL_ID = "2012043075"
+
+# 群組設定、外掛資料表、用量都存在 D1。建立：`wrangler d1 create line-group-assistant`，
+# 套用資料表：`npm run db:migrate`。
+# Groups, plugin tables and usage live in D1.
+[[d1_databases]]
+binding = "DB"
+database_name = "line-group-assistant"
+database_id = "f5e6fdd4-93b4-4e73-88de-89dce14000f6"
+migrations_dir = "migrations"

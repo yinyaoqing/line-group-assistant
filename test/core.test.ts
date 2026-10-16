@@ -6,27 +6,47 @@ import { plugins } from "../src/plugins";
 import { detectLang } from "../src/plugins/translate/detect";
 import { engines } from "../src/plugins/translate/engines";
 import { parseAdd } from "../src/plugins/tasks";
+import { MemoryAdminRepo } from "../src/storage/admins";
+import { MemoryGroupRepo, MemoryUsageMeter } from "../src/storage/groups";
 import { MemoryStorage } from "../src/storage/memory";
 
 const GID = "Cgroup";
 
-function setup(group: Partial<GroupConfig> = {}) {
+function setup(group: Partial<GroupConfig> = {}, env: Partial<Deps["env"]> = {}) {
   const replies: LineMessage[][] = [];
   const pushes: LineMessage[][] = [];
   const line: LineApi = {
     reply: async (_t, m) => void replies.push(m),
     push: async (_to, m) => void pushes.push(m),
     groupMemberName: async () => "Joseph",
+    groupName: async () => "工班群組",
   };
   const storage = new MemoryStorage();
+  const groups = new MemoryGroupRepo([
+    {
+      groupId: GID,
+      status: "active",
+      plugins: ["translate", "tasks"],
+      storage: { type: "memory" },
+      settings: { translate: { engine: "claude" } },
+      ...group,
+    },
+  ]);
+  const usage = new MemoryUsageMeter();
+  const admins = new MemoryAdminRepo();
+  const fullEnv = { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", ANTHROPIC_API_KEY: "k", DB: {} as D1Database, ...env };
   const deps: Deps = {
-    env: { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", ANTHROPIC_API_KEY: "k" },
+    env: fullEnv,
     line,
-    groups: [{ groupId: GID, plugins: ["translate", "tasks"], storage: { type: "memory" }, settings: { translate: { engine: "claude" } }, ...group }],
+    channel: { id: "default", joinPolicy: "code", activationCode: fullEnv.ACTIVATION_CODE },
+    groups,
+    admins,
+    usage,
     plugins,
     storageFor: () => storage,
+    origin: "https://bot.example",
   };
-  return { deps, replies, pushes, storage };
+  return { deps, replies, pushes, storage, groups, usage, admins, line };
 }
 
 const msg = (text: string, groupId = GID): LineEvent => ({
@@ -55,6 +75,10 @@ describe("parseCommand", () => {
   it("splits name and args", () => {
     expect(parseCommand("/task add 買螺絲")).toEqual({ name: "task", args: ["add", "買螺絲"], rest: "add 買螺絲" });
     expect(parseCommand("hello")).toBeNull();
+  });
+
+  it("accepts a full-width slash and a capitalised name, as phone keyboards type them", () => {
+    expect(parseCommand("／Task Done 1")).toEqual({ name: "task", args: ["Done", "1"], rest: "Done 1" });
   });
 });
 
@@ -165,23 +189,83 @@ describe("tasks plugin", () => {
     expect(textOf(replies[3]?.[0])).toContain("沒有未完成");
   });
 
+  it("supports phone shortcuts: /add, /todo card buttons and quick replies", async () => {
+    const { deps, replies } = setup({ plugins: ["tasks"] });
+    await handleEvent(msg("/add 買早餐 @JOJO 10/17"), deps);
+    const added = replies[0]?.[0] as { text: string; quickReply: { items: { action: { text: string } }[] } };
+    expect(added.text).toContain("#1 買早餐 [未開始] 👤JOJO ⏰10/17");
+    expect(added.quickReply.items.map((i) => i.action.text)).toEqual(["/task start 1", "/task done 1", "/todo", "/template", "/help"]);
+
+    await handleEvent(msg("／Todo"), deps);
+    const card = replies[1]?.[0] as { type: string; altText: string };
+    expect(card.type).toBe("flex");
+    expect(card.altText).toContain("#1 買早餐");
+    const sent = JSON.stringify(card).match(/"text":"\/task (?:start|done) \d+"/g);
+    expect(sent).toEqual(['"text":"/task start 1"', '"text":"/task done 1"']);
+
+    await handleEvent(msg("/task Done 1"), deps);
+    expect(textOf(replies[2]?.[0])).toContain("[完成]");
+  });
+
   it("pushes a weekly digest only when enabled and tasks are open", async () => {
-    const { deps, pushes } = setup({ plugins: ["tasks"] });
+    const { deps, pushes, groups } = setup({ plugins: ["tasks"], plan: "pro" });
     await handleEvent(msg("/task add 買螺絲"), deps);
-    await handleSchedule("0 0 * * 1", deps);
+    await handleSchedule("0 0 * * 1", deps, async () => deps.line);
     expect(pushes).toHaveLength(0);
-    deps.groups[0]!.settings = { tasks: { digest: true } };
-    await handleSchedule("0 0 * * 1", deps);
+    groups.groups[0]!.settings = { tasks: { digest: true } };
+    await handleSchedule("0 0 * * 1", deps, async () => deps.line);
     expect(textOf(pushes[0]?.[0])).toContain("#1 買螺絲");
   });
 });
 
-describe("unconfigured groups", () => {
-  it("reveal their ID on /id and ignore everything else", async () => {
+describe("group registration and activation", () => {
+  const join = (groupId: string): LineEvent => ({ type: "join", replyToken: "r", timestamp: 0, source: { type: "group", groupId } });
+
+  it("registers an invited group as pending and ignores it until activated", async () => {
+    const { deps, replies, groups } = setup({}, { ACTIVATION_CODE: "open-sesame" });
+    await handleEvent(join("Cnew"), deps);
+    expect(await groups.get("Cnew")).toMatchObject({ status: "pending", name: "工班群組", plugins: ["translate", "tasks", "items"] });
+    expect(textOf(replies[0]?.[0])).toContain("/activate");
+
+    await handleEvent(msg("/todo", "Cnew"), deps);
+    expect(replies).toHaveLength(1);
+
+    await handleEvent(msg("/activate wrong", "Cnew"), deps);
+    expect(textOf(replies[1]?.[0])).toContain("錯誤");
+    await handleEvent(msg("/activate open-sesame", "Cnew"), deps);
+    expect(textOf(replies[2]?.[0])).toContain("已啟用");
+    expect((await groups.get("Cnew"))?.status).toBe("active");
+
+    await handleEvent(msg("/todo", "Cnew"), deps);
+    expect(textOf(replies[3]?.[0])).toContain("沒有未完成");
+  });
+
+  it("refuses chat activation when no code is configured", async () => {
+    const { deps, replies, groups } = setup();
+    await handleEvent(join("Cnew"), deps);
+    await handleEvent(msg("/activate anything", "Cnew"), deps);
+    expect(textOf(replies[1]?.[0])).toContain("尚未開放");
+    expect((await groups.get("Cnew"))?.status).toBe("pending");
+  });
+
+  it("shows the ID of an unknown group on /id", async () => {
     const { deps, replies } = setup();
     await handleEvent(msg("hello", "Cother"), deps);
     expect(replies).toHaveLength(0);
     await handleEvent(msg("/id", "Cother"), deps);
     expect(textOf(replies[0]?.[0])).toContain("Cother");
+  });
+});
+
+describe("translation quota", () => {
+  it("counts translated characters and stops at the monthly limit", async () => {
+    const { deps, replies, usage } = setup({ groupId: "Cquota", settings: { translate: { engine: "claude", monthlyChars: 5 } } });
+    const spy = vi.spyOn(engines, "claude").mockResolvedValue("Hello");
+    await handleEvent(msg("大家早安喔", "Cquota"), deps);
+    expect(await usage.get("Cquota", "translate_chars")).toBe(5);
+    await handleEvent(msg("明天見", "Cquota"), deps);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(textOf(replies[1]?.[0])).toContain("額度已用完");
+    spy.mockRestore();
   });
 });

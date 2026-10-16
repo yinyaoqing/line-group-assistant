@@ -20,6 +20,7 @@ export interface LineApi {
   reply(replyToken: string, messages: LineMessage[]): Promise<void>;
   push(to: string, messages: LineMessage[]): Promise<void>;
   groupMemberName(groupId: string, userId: string): Promise<string | undefined>;
+  groupName(groupId: string): Promise<string | undefined>;
 }
 
 export class LineClient implements LineApi {
@@ -52,5 +53,12 @@ export class LineClient implements LineApi {
     if (!res.ok) return undefined;
     const data = (await res.json()) as { displayName?: string };
     return data.displayName;
+  }
+
+  async groupName(groupId: string): Promise<string | undefined> {
+    const res = await this.call(`/group/${groupId}/summary`, { method: "GET" });
+    if (!res.ok) return undefined;
+    const data = (await res.json()) as { groupName?: string };
+    return data.groupName;
   }
 }
