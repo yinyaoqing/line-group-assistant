@@ -670,3 +670,14 @@ describe("one-time activation codes", () => {
     expect((await call("DELETE", `/api/admin/codes/${made.data[1].code}`, undefined, boss)).status).toBe(200);
   });
 });
+
+describe("/m", () => {
+  it("replies with just a pointer that carries the quick reply buttons", async () => {
+    const w = world([active({ plugins: ["translate", "tasks"] })]);
+    await handleEvent(msg("/m"), w.deps);
+    const reply = w.replies[0]?.[0] as { text: string; quickReply: { items: { action: { text: string } }[] } };
+    expect(w.replies[0]).toHaveLength(1);
+    expect(reply.text).toBe("👇");
+    expect(reply.quickReply.items.map((i) => i.action.text)).toEqual(["/translate", "/todo", "/menu", "/template", "/help"]);
+  });
+});

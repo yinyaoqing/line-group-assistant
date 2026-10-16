@@ -127,7 +127,7 @@ export function helpText(active: Plugin[]): string {
   const sections = active.filter((p) => p.help).map((p) => [p.help!.title, ...p.help!.lines.map((l) => `・${l}`)].join("\n"));
   return [
     "📖 使用說明 How to use",
-    "👆 最快：點輸入框上方的按鈕（電腦版 LINE 沒有這排按鈕，請輸入 /menu）\n📝 要打字：輸入 /template 拿範本，按「複製」→ 貼到輸入框 → 改內容 → 送出",
+    "👆 最快：點輸入框上方的按鈕；按鈕不見時輸入 /m 叫出來（電腦版 LINE 沒有這排按鈕，請輸入 /menu）\n📝 要打字：輸入 /template 拿範本，按「複製」→ 貼到輸入框 → 改內容 → 送出",
     ...sections,
     "📊 /report　匯出報表（Excel／PDF）\n⚙️ /settings　設定頁（管理員）\n👥 /admin　管理員名單",
   ].join("\n\n");
@@ -237,6 +237,8 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   if (pre?.name === "admin") return sendQ([text(await adminCommand(group, pre.args, userId, event, deps))]);
   if (pre?.name === "report") return sendQ(await reportReply(group, deps));
   if (pre?.name === "menu") return sendQ([menuCard(active)]);
+  // /m: the smallest reply that can carry the quick reply buttons, for phones.
+  if (pre?.name === "m") return sendQ([text("👇")]);
 
   if (cmd?.name === "template") {
     const t = templateCard(active, cmd.args[0]);

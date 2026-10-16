@@ -185,6 +185,7 @@ npx wrangler d1 execute line-group-assistant --remote --command "SELECT * FROM u
 | `/admin`、`/admin add @成員`、`/admin remove @成員` | 查看、新增、移除管理員（移除限擁有者） |
 | `/help` | 使用說明：依功能分組，每個指令附範例 |
 | `/menu` | 功能選單卡片：每個功能一個大按鈕。**電腦版 LINE 不會顯示輸入框上方的快速按鈕**（那是 LINE 手機版才有的功能），電腦版請用這張卡片 |
+| `/m` | 只叫出輸入框上方的快速按鈕（手機版）：機器人只回一個「👇」，按鈕附在上面 |
 | `/template`、`/template tool` | 指令範本卡片：按「📋 複製」→ 貼到輸入框 → 改內容送出；加功能名稱只看該功能的範本。舊版 LINE 不支援複製按鈕時，改送一則一則可長按複製的訊息 |
 | `/t <文字>` | 翻譯這段文字（`trigger: "command"` 時的唯一翻譯方式） |
 | `/translate off`、`/translate on` | 關閉／開啟本群組的自動翻譯，關閉時 `/t` 仍可用；狀態存在試算表的 `translate` 分頁 |
