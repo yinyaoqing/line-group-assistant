@@ -184,6 +184,7 @@ async function groupView(group: GroupConfig, deps: ApiDeps) {
     translate: {
       languages: groupLanguages(t, plan),
       trigger: t.trigger ?? "all",
+      targetMode: t.targetMode === "members" ? "members" : "all",
       showName: t.showName !== false,
       minLength: Number(t.minLength ?? 2),
       glossary: typeof t.glossary === "string" ? t.glossary : "",
@@ -199,7 +200,7 @@ async function groupView(group: GroupConfig, deps: ApiDeps) {
 
 interface SettingsBody {
   plugins?: unknown;
-  translate?: { languages?: unknown; trigger?: unknown; showName?: unknown; minLength?: unknown; glossary?: unknown };
+  translate?: { languages?: unknown; trigger?: unknown; targetMode?: unknown; showName?: unknown; minLength?: unknown; glossary?: unknown };
   tasks?: { digest?: unknown };
 }
 
@@ -226,6 +227,10 @@ export function applySettings(group: GroupConfig, b: SettingsBody, plugins: Reco
   if (bt?.trigger !== undefined) {
     if (bt.trigger !== "all" && bt.trigger !== "command") throw new HttpError(400, "trigger 只能是 all 或 command");
     t.trigger = bt.trigger;
+  }
+  if (bt?.targetMode !== undefined) {
+    if (bt.targetMode !== "all" && bt.targetMode !== "members") throw new HttpError(400, "targetMode 只能是 all 或 members");
+    t.targetMode = bt.targetMode;
   }
   if (bt?.showName !== undefined) t.showName = bt.showName === true;
   if (bt?.minLength !== undefined) {

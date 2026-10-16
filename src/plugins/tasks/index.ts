@@ -1,5 +1,5 @@
 import type { LineMessage, Plugin, QuickItem } from "../../core/types";
-import { action, text, withQuickReply } from "../../core/types";
+import { action, tag, text, withQuickReply } from "../../core/types";
 import type { Row } from "../../storage/types";
 import { backfill, flagged, translateLabel, withTranslations } from "../translate/terms";
 
@@ -71,9 +71,33 @@ export const tasks: Plugin = {
   async onMessage(input, ctx) {
     if (!input.userId) return;
     const pending = await pendingFor(ctx, input.userId, input.event.timestamp);
-    if (!pending) return;
-    pendingCache.delete(ctx.group.groupId);
-    return [await complete(ctx, pending, input.text.trim(), input.event.timestamp)];
+    if (pending) {
+      pendingCache.delete(ctx.group.groupId);
+      return [await complete(ctx, pending, input.text.trim(), input.event.timestamp)];
+    }
+    // A long-press "Reply" to one of the bot's task messages, starting with done / fail / start.
+    const quoted = input.event.message?.quotedMessageId;
+    const verb = quoted ? quoteVerb(input.text) : undefined;
+    if (!quoted || !verb) return;
+    const row = (await ctx.storage.list(TABLE)).find((r) => (r.msgIds ?? "").split(",").includes(quoted));
+    if (!row) return;
+    const at = input.event.timestamp;
+    if (verb.kind === "done") {
+      if (row.status === STATUS.done) return [text(`✅ ${fmt(row)}\n這個任務已經完成了 Already done.`)];
+      if (verb.rest) return [await complete(ctx, row, verb.rest, at)];
+      return [await askReport(ctx, row, input.userId, at)];
+    }
+    if (verb.kind === "fail") return [await fail(ctx, row.id, verb.rest, at)];
+    const started = await ctx.storage.update(TABLE, row.id, { status: STATUS.doing, failReason: "" });
+    return [tagTask(withQuickReply(text(`▶️ ${fmt(started ?? row)}`), [doneOf(row)]), row.id)];
+  },
+
+  /** Remember which LINE messages are about which task, so a quote of one finds it. */
+  async onSent(key, messageId, ctx) {
+    const row = (await ctx.storage.list(TABLE)).find((r) => r.id === key);
+    if (!row) return;
+    const ids = [...(row.msgIds ? row.msgIds.split(",") : []), messageId].slice(-MAX_MSG_IDS);
+    await ctx.storage.update(TABLE, key, { msgIds: ids.join(",") });
   },
 
   async onCommand(input, ctx) {
@@ -102,7 +126,7 @@ export const tasks: Plugin = {
           createdBy: by,
           createdAt: new Date(input.event.timestamp).toISOString(),
         });
-        return [withQuickReply(text(`➕ 已新增 Added\n${fmt(row)}`), [startOf(row), doneOf(row)])];
+        return [tagTask(withQuickReply(text(`➕ 已新增 Added\n${fmt(row)}`), [startOf(row), doneOf(row)]), row.id)];
       }
       case "start": {
         const id = restArgs[0];
@@ -110,7 +134,7 @@ export const tasks: Plugin = {
         // Starting again (e.g. after a failure) clears the failure reason.
         const row = await db.update(TABLE, id, { status: STATUS.doing, failReason: "" });
         if (!row) return [text(`找不到任務 #${id} / Task #${id} not found`)];
-        return [withQuickReply(text(`▶️ ${fmt(row)}`), [doneOf(row)])];
+        return [tagTask(withQuickReply(text(`▶️ ${fmt(row)}`), [doneOf(row)]), row.id)];
       }
       case "done": {
         const [id, ...words] = restArgs;
@@ -122,32 +146,19 @@ export const tasks: Plugin = {
         if (report) return [await complete(ctx, row, report, input.event.timestamp)];
         // No report yet: wait for the member's next plain message as the report.
         if (!input.userId) return [text("請附上現況 Please add a report: /task done " + id + " <現況>")];
-        await db.update(TABLE, id, { reportBy: input.userId, reportUntil: new Date(input.event.timestamp + REPORT_WINDOW_MS).toISOString() });
-        pendingCache.delete(ctx.group.groupId);
-        const who = (await ctx.displayName(input.userId)) ?? "";
-        return [
-          text(
-            `✍️ 請 ${who} 直接回覆一則訊息，說明 #${id} 的現況（10 分鐘內）。\n例如：租到 2 台線鋸，週五下午可以取。\n\nReply with a message describing the outcome; it completes the task.\n也可以打 Or: /task done ${id} 現況`,
-          ),
-        ];
+        return [await askReport(ctx, row, input.userId, input.event.timestamp)];
       }
       case "fail": {
         const [id, ...why] = restArgs;
         if (!id) return [text("用法 Usage: /task fail <編號 id> [原因 reason]\n例 e.g. /task fail 3 下雨延期")];
-        const row = await db.update(TABLE, id, {
-          status: STATUS.failed,
-          failedAt: new Date(input.event.timestamp).toISOString(),
-          failReason: why.join(" "),
-        });
-        if (!row) return [text(`找不到任務 #${id} / Task #${id} not found`)];
-        return [withQuickReply(text(`❌ ${fmt(row)}`), [restartOf(row)])];
+        return [await fail(ctx, id, why.join(" "), input.event.timestamp)];
       }
       case "assign": {
         const [id, ...who] = restArgs;
         if (!id || !who.length) return [text("用法 Usage: /task assign <編號 id> <名字 name>")];
         // "@JOJO" (typed or picked from LINE's mention list) is stored as "JOJO", like /add does.
         const row = await db.update(TABLE, id, { owner: who.join(" ").replace(/^[@＠]/, "") });
-        return [text(row ? `👤 ${fmt(row)}` : `找不到任務 #${id} / Task #${id} not found`)];
+        return [row ? tagTask(text(`👤 ${fmt(row)}`), row.id) : text(`找不到任務 #${id} / Task #${id} not found`)];
       }
     }
   },
@@ -178,7 +189,61 @@ async function complete(ctx: Ctx, row: Row, report: string, timestamp: number): 
     reportBy: "",
     reportUntil: "",
   });
-  return text(`✅ ${fmt(done ?? row)}\n📝 回報 Report：${report}`);
+  return tagTask(text(`✅ ${fmt(done ?? row)}\n📝 回報 Report：${report}`), row.id);
+}
+
+async function fail(ctx: Ctx, id: string, reason: string, timestamp: number): Promise<LineMessage> {
+  const row = await ctx.storage.update(TABLE, id, { status: STATUS.failed, failedAt: new Date(timestamp).toISOString(), failReason: reason });
+  if (!row) return text(`找不到任務 #${id} / Task #${id} not found`);
+  return tagTask(withQuickReply(text(`❌ ${fmt(row)}`), [restartOf(row)]), row.id);
+}
+
+/** Wait for this member's next plain message (or quote) as the task's report. */
+async function askReport(ctx: Ctx, row: Row, userId: string, timestamp: number): Promise<LineMessage> {
+  await ctx.storage.update(TABLE, row.id, { reportBy: userId, reportUntil: new Date(timestamp + REPORT_WINDOW_MS).toISOString() });
+  pendingCache.delete(ctx.group.groupId);
+  const who = (await ctx.displayName(userId)) ?? "";
+  return tagTask(
+    text(
+      `✍️ 請 ${who} 直接回覆一則訊息，說明 #${row.id} 的現況（10 分鐘內）。\n例如：租到 2 台線鋸，週五下午可以取。\n\nReply with a message describing the outcome; it completes the task.\n也可以打 Or: /task done ${row.id} 現況`,
+    ),
+    row.id,
+  );
+}
+
+/** Messages about one task are tagged with its id, so quoting them later finds the task. */
+const tagTask = (m: LineMessage, id: string) => tag(m, "tasks", id);
+
+/** How many recent message IDs a task keeps for quote lookups. */
+const MAX_MSG_IDS = 10;
+
+/**
+ * Words that start a quoted reply to a task message, in the group's languages.
+ * Anything else is ordinary chat, so asking a question about a task never closes it.
+ */
+const QUOTE_VERBS: { kind: "done" | "fail" | "start"; words: string[] }[] = [
+  { kind: "done", words: ["完成", "做完", "done", "finished", "xong", "hoàn thành", "selesai", "tapos", "เสร็จ", "完了"] },
+  { kind: "fail", words: ["失敗", "fail", "failed", "thất bại", "không được", "gagal", "hindi natuloy", "ไม่สำเร็จ", "失敗した"] },
+  { kind: "start", words: ["開始", "start", "bắt đầu", "mulai", "simula", "เริ่ม", "開始します"] },
+];
+
+export function quoteVerb(textIn: string): { kind: "done" | "fail" | "start"; rest: string } | undefined {
+  const t = textIn.trim();
+  // A question about the task ("完成了嗎？", "done?") never changes it.
+  if (/[?？嗎吗]\s*$/.test(t)) return undefined;
+  const lower = t.toLowerCase();
+  for (const v of QUOTE_VERBS) {
+    // Longest word first, so "失敗した" wins over "失敗".
+    for (const w of [...v.words].sort((a, b) => b.length - a.length)) {
+      if (!lower.startsWith(w)) continue;
+      const next = t.slice(w.length, w.length + 1);
+      // Latin words must end at a word boundary ("done" but not "donation").
+      if (/[a-z]$/i.test(w) && next && /[a-z]/i.test(next)) continue;
+      // "完成了，租到 2 台" → report "租到 2 台".
+      return { kind: v.kind, rest: t.slice(w.length).replace(/^了?[\s,，:：、。.!！-]*/, "").trim() };
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -188,6 +253,9 @@ async function complete(ctx: Ctx, row: Row, report: string, timestamp: number): 
  */
 const PENDING_TTL_MS = 5 * 1000;
 const pendingCache = new Map<string, { rows: Row[]; at: number }>();
+
+/** Forget cached report waits, e.g. between tests. */
+export const clearPendingCache = () => pendingCache.clear();
 
 async function pendingFor(ctx: Ctx, userId: string, now: number): Promise<Row | undefined> {
   let hit = pendingCache.get(ctx.group.groupId);

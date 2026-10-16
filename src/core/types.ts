@@ -35,9 +35,15 @@ export interface LineEvent {
     type: string;
     id: string;
     text?: string;
-    /** People @-mentioned in a text message. */
-    mention?: { mentionees: { index: number; length: number; userId?: string; type?: string }[] };
+    /** People @-mentioned in a text message; isSelf marks a mention of this bot. */
+    mention?: { mentionees: { index: number; length: number; userId?: string; type?: string; isSelf?: boolean }[] };
+    /** ID of the message this one quotes (LINE's long-press "Reply"). */
+    quotedMessageId?: string;
   };
+  /** Button taps (postback actions): the data is the command the button stands for. */
+  postback?: { data: string };
+  /** memberJoined events: who joined. */
+  joined?: { members: { type: string; userId?: string }[] };
 }
 
 /** Per-group configuration. `plugins` lists which plugins run, in order. */
@@ -113,6 +119,13 @@ export interface Plugin {
   templates?: Template[];
   /** Buttons offered under every command reply, so phone users can tap instead of type. */
   quickReplies?: QuickItem[];
+  /** Called when people join the group; may reply, e.g. to ask their language. */
+  onMemberJoined?(userIds: string[], ctx: PluginContext): Promise<LineMessage[] | void>;
+  /**
+   * Called after a reply went out with the LINE message ID of each message this
+   * plugin tagged with `tag(message, key)`, so it can map later quotes back to `key`.
+   */
+  onSent?(key: string, messageId: string, ctx: PluginContext): Promise<void>;
 }
 
 /** A command to copy and edit, e.g. "/add 工作內容 @負責人 10/20". */
@@ -123,7 +136,10 @@ export interface Template {
   note?: string;
 }
 
-/** A tap-to-send button: tapping posts `text` to the chat as the user's own message. */
+/**
+ * A button for a command. Tapping it runs `text` as a postback, so nothing is
+ * posted to the chat; the bot's reply says who tapped.
+ */
 export interface QuickItem {
   label: string;
   text: string;
@@ -138,13 +154,27 @@ const MAX_QUICK = 13;
 export function withQuickReply(message: LineMessage, items: QuickItem[]): LineMessage {
   const current = (message as { quickReply?: { items?: { action: QuickAction }[] } }).quickReply;
   const existing = (current?.items ?? []).map((i) => i.action);
-  const seen = new Set(existing.map((a) => a.text));
+  const seen = new Set(existing.map((a) => a.data));
   const added = items.filter((i) => !seen.has(i.text) && seen.add(i.text)).map(action);
   const all = [...existing, ...added].slice(0, MAX_QUICK);
   if (!all.length) return message;
-  return { ...message, quickReply: { items: all.map((a) => ({ type: "action", action: a })) } };
+  const out: LineMessage = { ...message, quickReply: { items: all.map((a) => ({ type: "action", action: a })) } };
+  const t = tagOf(message);
+  return t ? tag(out, t.plugin, t.key) : out;
 }
 
-type QuickAction = { type: "message"; label: string; text: string };
+type QuickAction = { type: "postback"; label: string; data: string };
 
-export const action = (i: QuickItem): QuickAction => ({ type: "message", label: i.label.slice(0, 20), text: i.text });
+/** A postback action for a command; LINE caps labels at 20 characters and data at 300. */
+export const action = (i: QuickItem): QuickAction => ({ type: "postback", label: i.label.slice(0, 20), data: i.text.slice(0, 300) });
+
+/**
+ * Tag a message with a plugin key (e.g. a task id). The tag is not sent to LINE;
+ * after the reply, the plugin's onSent gets the LINE message ID for it.
+ */
+export function tag(message: LineMessage, plugin: string, key: string): LineMessage {
+  Object.defineProperty(message, "_tag", { value: { plugin, key }, enumerable: false });
+  return message;
+}
+
+export const tagOf = (message: LineMessage): { plugin: string; key: string } | undefined => (message as { _tag?: { plugin: string; key: string } })._tag;

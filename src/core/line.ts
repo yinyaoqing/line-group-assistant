@@ -17,7 +17,8 @@ export async function verifySignature(secret: string, body: string, signature: s
 }
 
 export interface LineApi {
-  reply(replyToken: string, messages: LineMessage[]): Promise<void>;
+  /** Returns the LINE message IDs of the sent messages, in order, when LINE reports them. */
+  reply(replyToken: string, messages: LineMessage[]): Promise<string[] | void>;
   push(to: string, messages: LineMessage[]): Promise<void>;
   groupMemberName(groupId: string, userId: string): Promise<string | undefined>;
   groupName(groupId: string): Promise<string | undefined>;
@@ -37,9 +38,11 @@ export class LineClient implements LineApi {
     return res;
   }
 
-  async reply(replyToken: string, messages: LineMessage[]): Promise<void> {
+  async reply(replyToken: string, messages: LineMessage[]): Promise<string[] | void> {
     if (!messages.length) return;
-    await this.call("/message/reply", { method: "POST", body: JSON.stringify({ replyToken, messages: messages.slice(0, 5) }) });
+    const res = await this.call("/message/reply", { method: "POST", body: JSON.stringify({ replyToken, messages: messages.slice(0, 5) }) });
+    const data = (await res.json().catch(() => ({}))) as { sentMessages?: { id: string }[] };
+    return data.sentMessages?.map((m) => m.id);
   }
 
   async push(to: string, messages: LineMessage[]): Promise<void> {

@@ -8,7 +8,7 @@ import { buildReport, reportUrl, summaryText } from "../report";
 import { randomId, signToken } from "./crypto";
 import type { LineApi } from "./line";
 import type { Env, GroupConfig, LineEvent, LineMessage, Plugin, PluginContext } from "./types";
-import { text, withQuickReply, type QuickItem, type Template } from "./types";
+import { action, tag, tagOf, text, withQuickReply, type QuickItem, type Template } from "./types";
 
 /** The LINE official account an event came in on, and how its groups get activated. */
 export interface ChannelInfo {
@@ -97,7 +97,7 @@ export function menuCard(active: Plugin[]): LineMessage {
     style: "secondary",
     height: "sm",
     flex: 1,
-    action: { type: "message", label: i.label.slice(0, 20), text: i.text },
+    action: action(i),
   });
   const rows = [];
   for (let i = 0; i < items.length; i += 2) {
@@ -188,6 +188,9 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   const gid = groupIdOf(event);
   if (!gid) return; // 1:1 chats are not handled
   const userId = event.source.userId;
+  // A button tap (postback) carries the command it stands for; nothing was posted to the chat.
+  const viaButton = event.type === "postback";
+  const input = viaButton ? event.postback?.data : event.message?.type === "text" ? event.message.text : undefined;
 
   const send = async (messages: LineMessage[]) => {
     if (event.replyToken && messages.length) await deps.line.reply(event.replyToken, messages);
@@ -207,7 +210,7 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   }
 
   const group = await deps.groups.get(gid);
-  const pre = event.message?.type === "text" ? parseCommand(event.message.text ?? "") : null;
+  const pre = input ? parseCommand(input) : null;
 
   if (event.type === "join" || pre?.name === "id") {
     if (group?.status !== "active") {
@@ -222,16 +225,52 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   if (pre?.name === "activate") return activate(gid, group, pre.args[0], userId, deps, reply);
 
   if (group?.status !== "active") return;
-  if (event.type !== "message" || event.message?.type !== "text" || !event.message.text) return;
-
-  const raw = event.message.text;
-  const cmd = pre;
-  const replies: LineMessage[] = [];
   const active = group.plugins.map((n) => deps.plugins[n]).filter((p): p is Plugin => !!p);
   const quick = [...active.flatMap((p) => p.quickReplies ?? []), MENU, TEMPLATES, HELP];
-  // Every reply in an active group carries the quick reply buttons (shown on phones only).
-  const sendQ = (messages: LineMessage[]) =>
-    send(messages.map((m, i) => (i === messages.length - 1 ? withQuickReply(m, quick) : m)));
+
+  /**
+   * Reply with the quick reply buttons on the last message (shown on phones only).
+   * After a button tap, say who tapped, since nothing appeared in the chat. Then
+   * hand plugins the LINE IDs of the messages they tagged, so quotes map back.
+   */
+  const sendQ = async (messages: LineMessage[]) => {
+    if (!event.replyToken || !messages.length) return;
+    const out = messages.map((m, i) => (i === messages.length - 1 ? withQuickReply(m, quick) : m));
+    const first = out[0] as { type?: string; text?: string };
+    if (viaButton && userId && first.type === "text") {
+      const who = await deps.line.groupMemberName(group.groupId, userId).catch(() => undefined);
+      if (who) {
+        const t = tagOf(out[0]!);
+        out[0] = { ...out[0], text: `👆 ${who}\n${first.text}` };
+        if (t) tag(out[0], t.plugin, t.key);
+      }
+    }
+    const ids = await deps.line.reply(event.replyToken, out);
+    if (!ids) return;
+    for (const [i, m] of out.entries()) {
+      const t = tagOf(m);
+      const plugin = t && deps.plugins[t.plugin];
+      if (!t || !ids[i] || !plugin?.onSent) continue;
+      await plugin.onSent(t.key, ids[i]!, context(deps, deps.line, group, plugin)).catch((err) => console.error(`onSent ${plugin.name} failed`, err));
+    }
+  };
+
+  if (event.type === "memberJoined") {
+    const joined = (event.joined?.members ?? []).map((m) => m.userId).filter((u): u is string => !!u);
+    const replies: LineMessage[] = [];
+    for (const plugin of active) {
+      if (!plugin.onMemberJoined || !joined.length) continue;
+      const out = await plugin.onMemberJoined(joined, context(deps, deps.line, group, plugin)).catch((err) => console.error(err));
+      if (out) replies.push(...out);
+    }
+    return sendQ(replies.slice(0, 5));
+  }
+
+  if (!input) return;
+  if (viaButton && !pre) return; // buttons only ever stand for commands
+  const raw = input;
+  const cmd = pre;
+  const replies: LineMessage[] = [];
 
   if (pre?.name === "settings") return sendQ(await settingsLink(group, userId, deps));
   if (pre?.name === "admin") return sendQ([text(await adminCommand(group, pre.args, userId, event, deps))]);
@@ -272,12 +311,11 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
 
   if (cmd && cmd.name === "help") replies.push(text(helpText(active)));
 
+  // The quick reply buttons ride on every reply. LINE hides them once anyone posts
+  // and groups have no rich menu, so replying with them each time (translations
+  // included) is as close to always-on as a group allows.
   const out = replies.slice(0, 5);
-  // Offer the plugins' shortcuts as tap-to-send buttons under every reply. LINE hides
-  // them once anyone posts and groups have no rich menu, so replying with them each
-  // time (translations included) is as close to always-on as a group allows.
-  if (out.length) out[out.length - 1] = withQuickReply(out[out.length - 1]!, quick);
-  await send(out);
+  await sendQ(out);
 }
 
 /**

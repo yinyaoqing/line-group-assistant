@@ -17,6 +17,7 @@ export const defaultGroup = (groupId: string, channelId = "default"): GroupConfi
       trigger: "all", // "all": every message; "command": only /t
       showName: true,
       languages: ["zh-TW", "en"], // see config/languages.ts; the plan limits which are usable
+      targetMode: "members", // only translate into languages members use; new members pick theirs
     },
     tasks: { digest: false }, // weekly push costs message quota, so off by default
   },

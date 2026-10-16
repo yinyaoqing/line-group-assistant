@@ -195,16 +195,16 @@ describe("tasks plugin", () => {
   it("supports phone shortcuts: /add, /todo card buttons and quick replies", async () => {
     const { deps, replies } = setup({ plugins: ["tasks"] });
     await handleEvent(msg("/add 買早餐 @JOJO 10/17"), deps);
-    const added = replies[0]?.[0] as { text: string; quickReply: { items: { action: { text: string } }[] } };
+    const added = replies[0]?.[0] as { text: string; quickReply: { items: { action: { data: string } }[] } };
     expect(added.text).toContain("#1 買早餐 [未開始] 👤JOJO ⏰10/17");
-    expect(added.quickReply.items.map((i) => i.action.text)).toEqual(["/task start 1", "/task done 1", "/todo", "/menu", "/template", "/help"]);
+    expect(added.quickReply.items.map((i) => i.action.data)).toEqual(["/task start 1", "/task done 1", "/todo", "/menu", "/template", "/help"]);
 
     await handleEvent(msg("／Todo"), deps);
     const card = replies[1]?.[0] as { type: string; altText: string };
     expect(card.type).toBe("flex");
     expect(card.altText).toContain("#1 買早餐");
-    const sent = JSON.stringify(card).match(/"text":"\/task (?:start|done) \d+"/g);
-    expect(sent).toEqual(['"text":"/task start 1"', '"text":"/task done 1"']);
+    const sent = JSON.stringify(card).match(/"data":"\/task (?:start|done) \d+"/g);
+    expect(sent).toEqual(['"data":"/task start 1"', '"data":"/task done 1"']);
 
     await handleEvent(msg("/task Done 1 OK"), deps);
     expect(textOf(replies[2]?.[0])).toContain("[完成]");

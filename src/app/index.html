@@ -180,7 +180,7 @@ async function groupPage(groupId) {
   const g = await api("/api/groups/" + encodeURIComponent(groupId));
   const draft = {
     plugins: [...g.plugins],
-    translate: { languages: [...g.translate.languages], trigger: g.translate.trigger, showName: g.translate.showName, minLength: g.translate.minLength, glossary: g.translate.glossary },
+    translate: { languages: [...g.translate.languages], trigger: g.translate.trigger, targetMode: g.translate.targetMode, showName: g.translate.showName, minLength: g.translate.minLength, glossary: g.translate.glossary },
     tasks: { digest: g.tasks.digest },
   };
   const isPro = g.plan.id === "pro";
@@ -239,6 +239,7 @@ async function groupPage(groupId) {
       h("p", { class: "muted" }, "每則訊息會翻成其他勾選的語言（至少兩種）。"),
       langChips,
       h("div", { class: "row", style: "margin-top:12px" }, h("div", {}, "要翻譯哪些訊息", h("small", {}, "選「只翻 /t」時，自動翻譯關閉")), seg),
+      h("div", { class: "row" }, h("div", {}, "只翻成成員用的語言", h("small", {}, "依每個人平常講的語言（或 /lang 設定）決定要翻成哪些，減少洗版和翻譯量；新成員加入時會請他選語言")), switchEl(draft.translate.targetMode === "members", false, (on) => { draft.translate.targetMode = on ? "members" : "all"; })),
       h("div", { class: "row" }, h("div", {}, "顯示發言者名字", h("small", {}, "譯文前面加上名字")), switchEl(draft.translate.showName, false, (on) => { draft.translate.showName = on; })),
       h("div", { class: "row" }, h("div", {}, "最短翻譯長度", h("small", {}, "少於這個字數的訊息不翻（例如「OK」）")), minLen)),
 

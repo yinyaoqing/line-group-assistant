@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { effectivePlan, PLANS } from "../config/plans";
 import { handleApi, type ApiDeps } from "../src/api";
 import { decrypt, encrypt, signToken, verifyToken } from "../src/core/crypto";
@@ -16,10 +16,21 @@ import { MemoryStorage } from "../src/storage/memory";
 
 const SECRET = "test-app-secret";
 
+beforeEach(async () => {
+  (await import("../src/plugins/translate/members")).clearMemberCache();
+  (await import("../src/plugins/tasks")).clearPendingCache();
+});
+
+let sent = 0;
+
 function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "default", joinPolicy: "code" }) {
   const replies: LineMessage[][] = [];
   const line: LineApi = {
-    reply: async (_t, m) => void replies.push(m),
+    // Like LINE, return an ID per sent message (M1, M2, …).
+    reply: async (_t, m) => {
+      replies.push(m);
+      return m.map(() => `M${++sent}`);
+    },
     push: async () => {},
     groupMemberName: async (_g, u) => ({ U1: "Joseph", U2: "JOJO" })[u] ?? "Someone",
     groupName: async () => "工班",
@@ -321,7 +332,7 @@ describe("tools and materials", () => {
     const card = w.replies[1]?.[0] as { type: string; altText: string };
     expect(card.type).toBe("flex");
     expect(card.altText).toContain("線鋸 × 3");
-    expect(JSON.stringify(card).match(/"text":"\/tool 線鋸 [+-]1"/g)).toEqual(['"text":"/tool 線鋸 -1"', '"text":"/tool 線鋸 +1"']);
+    expect(JSON.stringify(card).match(/"data":"\/tool 線鋸 [+-]1"/g)).toEqual(['"data":"/tool 線鋸 -1"', '"data":"/tool 線鋸 +1"']);
   });
 });
 
@@ -330,8 +341,8 @@ describe("quick replies", () => {
     const w = world([active({ plugins: ["translate", "tasks", "tools", "materials"] })]);
     const spy = vi.spyOn(engines, "google").mockResolvedValue({ text: "Good morning" });
     await handleEvent(msg("大家早安"), w.deps);
-    const reply = w.replies[0]?.[0] as { quickReply: { items: { action: { text: string } }[] } };
-    expect(reply.quickReply.items.map((i) => i.action.text)).toEqual(["/translate", "/todo", "/tool", "/material", "/menu", "/template", "/help"]);
+    const reply = w.replies[0]?.[0] as { quickReply: { items: { action: { data: string } }[] } };
+    expect(reply.quickReply.items.map((i) => i.action.data)).toEqual(["/translate", "/todo", "/tool", "/material", "/menu", "/template", "/help"]);
     spy.mockRestore();
   });
 });
@@ -504,7 +515,7 @@ describe("tools vs materials", () => {
     expect((await db.list("materials")).map((r) => [r.name, r.qty])).toEqual([["螺絲", "80"]]);
 
     await handleEvent(msg("/material"), w.deps);
-    expect(JSON.stringify(w.replies[3]?.[0])).toContain('"text":"/material 螺絲 +1"');
+    expect(JSON.stringify(w.replies[3]?.[0])).toContain('"data":"/material 螺絲 +1"');
     await handleEvent(msg("/item 線鋸 1"), w.deps);
     expect(textOf(w.replies[4]?.[0])).toContain("/tool 工具");
     expect(await db.list("items")).toEqual([]);
@@ -517,14 +528,14 @@ describe("failed tasks", () => {
     await handleEvent(msg("/add 搭鷹架 10/20"), w.deps);
     await handleEvent(msg("/add 買螺絲"), w.deps);
     await handleEvent(msg("/task fail 1 下雨延期"), w.deps);
-    const failed = w.replies[2]?.[0] as { text: string; quickReply: { items: { action: { text: string } }[] } };
+    const failed = w.replies[2]?.[0] as { text: string; quickReply: { items: { action: { data: string } }[] } };
     expect(failed.text).toBe("❌ #1 搭鷹架 [失敗] 👤Joseph ⏰10/20 （下雨延期）");
-    expect(failed.quickReply.items[0]!.action.text).toBe("/task start 1");
+    expect(failed.quickReply.items[0]!.action.data).toBe("/task start 1");
 
     await handleEvent(msg("/todo"), w.deps);
     const card = w.replies[3]?.[0] as { altText: string };
     expect(card.altText).not.toContain("搭鷹架");
-    expect(JSON.stringify(card)).toContain('"text":"/task fail 2"');
+    expect(JSON.stringify(card)).toContain('"data":"/task fail 2"');
 
     await handleEvent(msg("/task start 1"), w.deps);
     expect(textOf(w.replies[4]?.[0])).toBe("▶️ #1 搭鷹架 [進行中] 👤Joseph ⏰10/20");
@@ -554,7 +565,7 @@ describe("menu and always-on quick replies", () => {
     await handleEvent(msg("/menu"), w.deps);
     const card = w.replies[0]?.[0] as { type: string };
     expect(card.type).toBe("flex");
-    const sends = JSON.stringify(card).match(/"type":"message","label":"[^"]+","text":"([^"]+)"/g)!.map((s) => s.replace(/.*"text":"/, "").replace(/"$/, ""));
+    const sends = JSON.stringify(card).match(/"type":"postback","label":"[^"]+","data":"([^"]+)"/g)!.map((s) => s.replace(/.*"data":"/, "").replace(/"$/, ""));
     expect(sends.slice(0, 8)).toEqual(["/translate", "/todo", "/tool", "/material", "/report", "/template", "/settings", "/help"]);
   });
 
@@ -675,9 +686,139 @@ describe("/m", () => {
   it("replies with just a pointer that carries the quick reply buttons", async () => {
     const w = world([active({ plugins: ["translate", "tasks"] })]);
     await handleEvent(msg("/m"), w.deps);
-    const reply = w.replies[0]?.[0] as { text: string; quickReply: { items: { action: { text: string } }[] } };
+    const reply = w.replies[0]?.[0] as { text: string; quickReply: { items: { action: { data: string } }[] } };
     expect(w.replies[0]).toHaveLength(1);
     expect(reply.text).toBe("👇");
-    expect(reply.quickReply.items.map((i) => i.action.text)).toEqual(["/translate", "/todo", "/menu", "/template", "/help"]);
+    expect(reply.quickReply.items.map((i) => i.action.data)).toEqual(["/translate", "/todo", "/menu", "/template", "/help"]);
+  });
+});
+
+describe("product site", () => {
+  it("shows the plans straight from config/plans.ts and links to the LINE account", async () => {
+    const { siteHtml } = await import("../src/site");
+    const { PLANS } = await import("../config/plans");
+    const html = siteHtml("https://bot.example");
+    expect(html).toContain(`NT$${PLANS.pro.price} <small>／群組／月</small>`);
+    expect(html).toContain(`每月翻譯 ${PLANS.free.monthlyChars.toLocaleString("en-US")} 字`);
+    expect(html).toContain("https://line.me/R/ti/p/%40021eubwk");
+    expect(html).toContain('<meta property="og:url" content="https://bot.example/">');
+  });
+});
+
+describe("button taps (postback)", () => {
+  const tap = (data: string, userId = "U1"): LineEvent => ({ type: "postback", replyToken: "r", timestamp: 0, source: { type: "group", groupId: "Cg", userId }, postback: { data } });
+
+  it("run the command without anything posted, and the reply says who tapped", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    await handleEvent(msg("/add 搭鷹架"), w.deps);
+    await handleEvent(tap("/task start 1", "U2"), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toBe("👆 JOJO\n▶️ #1 搭鷹架 [進行中] 👤Joseph");
+    const qr = (w.replies[1]?.[0] as { quickReply: { items: { action: { type: string } }[] } }).quickReply.items;
+    expect(qr.every((i) => i.action.type === "postback")).toBe(true);
+  });
+
+  it("ignore data that is not a command", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    await handleEvent(tap("hello"), w.deps);
+    expect(w.replies).toHaveLength(0);
+  });
+});
+
+describe("quoting a task message", () => {
+  const quote = (textIn: string, quotedMessageId: string, userId = "U1"): LineEvent => ({
+    type: "message",
+    replyToken: "r",
+    timestamp: 0,
+    source: { type: "group", groupId: "Cg", userId },
+    message: { type: "text", id: "q", text: textIn, quotedMessageId },
+  });
+  const added = async (w: ReturnType<typeof world>, title: string) => {
+    await handleEvent(msg(`/add ${title}`), w.deps);
+    const rows = await w.deps.storageFor(active()).list("tasks");
+    return rows.at(-1)!.msgIds!.split(",").at(-1)!; // the ID of the "➕ 已新增" message
+  };
+
+  it("completes, fails or starts the task by the first word, with the rest as report or reason", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    const m1 = await added(w, "去租工具");
+    await handleEvent(quote("完成了，租到 2 台，週五可取", m1), w.deps);
+    expect(textOf(w.replies.at(-1)?.[0])).toBe("✅ #1 去租工具 [完成] 👤Joseph\n📝 回報 Report：租到 2 台，週五可取");
+
+    const m2 = await added(w, "搭鷹架");
+    await handleEvent(quote("Thất bại trời mưa", m2, "U2"), w.deps);
+    expect(textOf(w.replies.at(-1)?.[0])).toBe("❌ #2 搭鷹架 [失敗] 👤Joseph （trời mưa）");
+
+    // The ❌ reply is about task 2 too, so quoting it works as well.
+    const failId = (await w.deps.storageFor(active()).list("tasks")).find((r) => r.id === "2")!.msgIds!.split(",").at(-1)!;
+    await handleEvent(quote("開始", failId), w.deps);
+    expect(textOf(w.replies.at(-1)?.[0])).toBe("▶️ #2 搭鷹架 [進行中] 👤Joseph");
+  });
+
+  it("asks for a report when only 'done' is quoted, and leaves questions and chat alone", async () => {
+    const w = world([active({ plugins: ["tasks"] })]);
+    const m1 = await added(w, "去租工具");
+    const before = w.replies.length;
+    await handleEvent(quote("完成了嗎？", m1), w.deps);
+    await handleEvent(quote("這個要多少錢", m1), w.deps);
+    expect(w.replies.length).toBe(before);
+
+    await handleEvent(quote("done", m1), w.deps);
+    expect(textOf(w.replies.at(-1)?.[0])).toContain("請 Joseph 直接回覆一則訊息");
+    await handleEvent(msg("租到 2 台"), w.deps);
+    expect(textOf(w.replies.at(-1)?.[0])).toContain("📝 回報 Report：租到 2 台");
+  });
+
+  it("reads verbs in several languages, at word boundaries", async () => {
+    const { quoteVerb } = await import("../src/plugins/tasks");
+    expect(quoteVerb("Selesai, sudah dikirim")).toEqual({ kind: "done", rest: "sudah dikirim" });
+    expect(quoteVerb("xong rồi")).toEqual({ kind: "done", rest: "rồi" });
+    expect(quoteVerb("donation box")).toBeUndefined();
+    expect(quoteVerb("done?")).toBeUndefined();
+    expect(quoteVerb("失敗した 雨")).toEqual({ kind: "fail", rest: "雨" });
+  });
+});
+
+describe("translating only into members' languages", () => {
+  const group = () =>
+    world([active({ plan: "pro", plugins: ["translate"], settings: { translate: { engine: "google", languages: ["zh-TW", "en", "vi"], targetMode: "members" } } })]);
+
+  it("learns who speaks what, and skips languages nobody in the group uses", async () => {
+    const w = group();
+    const spy = vi.spyOn(engines, "google").mockImplementation(async (_t, target) => ({ text: `[${target}]` }));
+    await handleEvent(msg("大家早安"), w.deps); // nobody known yet: every language
+    expect(spy.mock.calls.map((c) => c[1]).sort()).toEqual(["en", "vi"]);
+
+    spy.mockClear();
+    await handleEvent(msg("Chào buổi sáng", "U2"), w.deps); // U2 writes Vietnamese
+    await handleEvent(msg("明天七點集合"), w.deps); // members: zh-TW (U1), vi (U2) → only vi
+    expect(spy.mock.calls.at(-1)?.[1]).toBe("vi");
+    expect(spy.mock.calls.filter((c) => c[1] === "en")).toHaveLength(0);
+    spy.mockRestore();
+  });
+
+  it("lets members set their language with /lang, and asks newcomers to pick one", async () => {
+    const w = group();
+    const spy = vi.spyOn(engines, "google").mockImplementation(async (_t, target) => ({ text: `[${target}]` }));
+    await handleEvent(msg("大家早安"), w.deps);
+    await handleEvent(msg("/lang en", "U3"), w.deps);
+    expect(textOf(w.replies.at(-1)?.[0])).toBe("✅ Someone 的語言 Language：🇺🇸 English");
+    spy.mockClear();
+    await handleEvent(msg("明天七點集合"), w.deps);
+    expect(spy.mock.calls.map((c) => c[1])).toEqual(["en"]);
+
+    await handleEvent({ type: "memberJoined", replyToken: "r", timestamp: 0, source: { type: "group", groupId: "Cg" }, joined: { members: [{ type: "user", userId: "U9" }] } }, w.deps);
+    const welcome = w.replies.at(-1)?.[0] as { text: string; quickReply: { items: { action: { data: string } }[] } };
+    expect(welcome.text).toContain("請點下方按鈕選擇你的語言");
+    expect(welcome.quickReply.items.slice(0, 3).map((i) => i.action.data)).toEqual(["/lang zh-TW", "/lang en", "/lang vi"]);
+    spy.mockRestore();
+  });
+
+  it("keeps translating into every language in the default mode", async () => {
+    const w = world([active({ plan: "pro", plugins: ["translate"], settings: { translate: { engine: "google", languages: ["zh-TW", "en", "vi"] } } })]);
+    const spy = vi.spyOn(engines, "google").mockImplementation(async (_t, target) => ({ text: `[${target}]` }));
+    await handleEvent(msg("Chào buổi sáng", "U2"), w.deps);
+    await handleEvent(msg("明天七點集合"), w.deps);
+    expect(spy.mock.calls.slice(-2).map((c) => c[1]).sort()).toEqual(["en", "vi"]);
+    spy.mockRestore();
   });
 });

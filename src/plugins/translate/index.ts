@@ -3,6 +3,7 @@ import type { Plan } from "../../../config/plans";
 import type { Plugin, PluginContext } from "../../core/types";
 import { text, withQuickReply } from "../../core/types";
 import { detectScript } from "./detect";
+import { audience, declareLanguage, languageButtons, noteLanguage, parseLang } from "./members";
 import { baseLang, engines, type TranslateOptions } from "./engines";
 
 /**
@@ -17,6 +18,7 @@ import { baseLang, engines, type TranslateOptions } from "./engines";
  *   zhRatio:   share of Chinese needed to treat mixed text as Chinese (default 0.3)
  *   glossary:  fixed term translations, used by the "claude" engine
  *   model:     Claude model override
+ *   targetMode: "all" (default) or "members" – only translate into languages members actually use
  *   monthlyChars: per-group override of the plan's monthly character limit; 0 = unlimited
  *
  * Commands:
@@ -30,10 +32,10 @@ import { baseLang, engines, type TranslateOptions } from "./engines";
  */
 export const translate: Plugin = {
   name: "translate",
-  commands: ["t", "translate"],
+  commands: ["t", "translate", "lang"],
   help: {
     title: "🌐 翻譯 Translate",
-    lines: ["直接聊天就會自動翻譯", "/translate　開／關自動翻譯", "/t 文字　只翻這一句"],
+    lines: ["直接聊天就會自動翻譯", "/translate　開／關自動翻譯", "/t 文字　只翻這一句", "/lang　選擇你的語言"],
   },
   templates: [{ label: "翻譯一句話", text: "/t 要翻譯的文字" }],
   quickReplies: [{ label: "🌐 翻譯開關 Translate", text: "/translate" }],
@@ -45,11 +47,31 @@ export const translate: Plugin = {
   },
 
   async onCommand(input, ctx) {
+    if (input.name === "lang") return langCommand(input.rest, input.userId, ctx, input.event.timestamp);
     if (input.name !== "t") return toggle(input.args[0], ctx);
     if (!input.rest) return [text("用法 Usage: /t <要翻譯的文字 text to translate>")];
     return run(input.rest, input.userId, ctx, true);
   },
+
+  /** In "members" mode, ask newcomers their language, so translations reach them before they speak. */
+  async onMemberJoined(_userIds, ctx) {
+    if (ctx.settings.targetMode !== "members") return;
+    const langs = groupLanguages(ctx.settings, ctx.plan);
+    return [withQuickReply(text("👋 歡迎！請點下方按鈕選擇你的語言\nWelcome! Tap your language below.\nChào mừng! Chọn ngôn ngữ của bạn."), languageButtons(langs))];
+  },
 };
+
+/** /lang shows the language buttons; /lang vi sets the sender's language. */
+async function langCommand(arg: string, userId: string | undefined, ctx: Ctx, timestamp: number) {
+  const langs = groupLanguages(ctx.settings, ctx.plan);
+  const choose = () => [withQuickReply(text("🌐 請選擇你的語言 Choose your language"), languageButtons(langs))];
+  if (!arg || !userId) return choose();
+  const lang = parseLang(arg);
+  if (!lang || !langs.includes(lang)) return choose();
+  await declareLanguage(ctx, userId, lang, timestamp);
+  const who = (await ctx.displayName(userId)) ?? "";
+  return [text(`✅ ${who} 的語言 Language：${LANGUAGES[lang].flag} ${LANGUAGES[lang].name}`)];
+}
 
 type Ctx = Parameters<NonNullable<Plugin["onMessage"]>>[1];
 
@@ -139,6 +161,8 @@ export interface TranslateCtx {
   plan: Plan;
   env: PluginContext["env"];
   usage: PluginContext["usage"];
+  /** Only translate into these languages (the members' languages); undefined = all of the group's. */
+  audience?: LangCode[];
 }
 
 /**
@@ -154,7 +178,7 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
   const langs = groupLanguages(s, t.plan);
   const latin = langs.filter((l) => LANGUAGES[l].latin);
   let from: LangCode | undefined = script !== "latin" ? script : latin.length === 1 ? latin[0] : undefined;
-  let targets = langs.filter((l) => l !== from && (!only || only.includes(l)));
+  let targets = langs.filter((l) => l !== from && (!only || only.includes(l)) && (!t.audience || t.audience.includes(l)));
   if (!targets.length) return { from, outs: [] };
 
   const engine = engines[String(s.engine ?? "google")];
@@ -188,7 +212,10 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
 async function translateText(source: string, userId: string | undefined, ctx: Ctx) {
   const s = ctx.settings;
   if (source.trim().length < Number(s.minLength ?? 2)) return;
-  const { outs } = await translateCore(source, ctx);
+  const now = Date.now();
+  const { from, outs } = await translateCore(source, { ...ctx, audience: await audience(ctx, now) });
+  // Learn the writer's language, for "translate only into members' languages".
+  if (from && userId) await noteLanguage(ctx, userId, from, now).catch((err) => console.error("noteLanguage failed", err));
   if (!outs.length) return;
 
   const name = s.showName === false ? undefined : await ctx.displayName(userId);
