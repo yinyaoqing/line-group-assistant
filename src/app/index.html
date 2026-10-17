@@ -127,6 +127,10 @@ const switchEl = (checked, disabled, onchange) => {
 };
 
 // ---------- sign-in ----------
+// LIFF may be initialised once per page; forms and sign-in share it.
+let liffReady = null;
+const initLiff = (liffId) => (liffReady ??= liff.init({ liffId }));
+
 async function signIn() {
   const config = await api("/api/config");
   const params = new URLSearchParams(location.search);
@@ -134,7 +138,7 @@ async function signIn() {
   let idToken = null;
   if (!devSub) {
     if (!config.liffId) throw new Error("設定頁尚未開通（LIFF_ID 未設定）\nThe settings page is not set up yet.");
-    await liff.init({ liffId: config.liffId });
+    await initLiff(config.liffId);
     if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return new Promise(() => {}); }
     idToken = liff.getIDToken();
   }
@@ -182,6 +186,7 @@ async function groupPage(groupId) {
     plugins: [...g.plugins],
     translate: { languages: [...g.translate.languages], trigger: g.translate.trigger, targetMode: g.translate.targetMode, showName: g.translate.showName, minLength: g.translate.minLength, glossary: g.translate.glossary },
     tasks: { digest: g.tasks.digest },
+    notify: g.notify,
   };
   const isPro = g.plan.id === "pro";
   const pct = g.usage.limit ? Math.min(100, Math.round((g.usage.translateChars / g.usage.limit) * 100)) : 0;
@@ -214,6 +219,11 @@ async function groupPage(groupId) {
   const glossary = h("textarea", { placeholder: "收頭樑 = trimmer beam; 格柵 = joist" });
   glossary.value = g.translate.glossary;
   glossary.addEventListener("input", () => { draft.translate.glossary = glossary.value; });
+  const notifySeg = h("div", { class: "seg" }, [["reply", "免費 Free"], ["push", "立即 Push"]].map(([v, label]) => {
+    const el = h("label", { class: draft.notify === v ? "on" : "" }, h("input", { type: "radio", name: "notify" }), label);
+    el.addEventListener("click", () => { draft.notify = v; notifySeg.querySelectorAll("label").forEach((x) => x.classList.toggle("on", x === el)); });
+    return el;
+  }));
   const minLen = h("input", { type: "number", min: 1, max: 50, value: draft.translate.minLength, style: "width:80px" });
   minLen.addEventListener("input", () => { draft.translate.minLength = Number(minLen.value); });
 
@@ -250,8 +260,9 @@ async function groupPage(groupId) {
 
     h("div", { class: "card" },
       h("h2", {}, "任務 Tasks"),
-      h("div", { class: "row" }, h("div", {}, "每週一推播進度摘要", h("small", {}, isPro ? "會用到 LINE 推播額度" : "專業版功能 🔒")),
-        switchEl(draft.tasks.digest, !isPro, (on) => { draft.tasks.digest = on; }))),
+      h("div", { class: "row" }, h("div", {}, "每週一進度摘要", h("small", {}, isPro ? "週一 08:00 統計" : "專業版功能 🔒")),
+        switchEl(draft.tasks.digest, !isPro, (on) => { draft.tasks.digest = on; })),
+      h("div", { class: "row" }, h("div", {}, "摘要怎麼送出", h("small", {}, "免費：週一第一次有人說話或按按鈕時一起送出；立即：08:00 準時推播，但會用到 LINE 推播額度")), notifySeg)),
 
     h("div", { class: "card" },
       h("h2", {}, "匯出報表 Report"),
@@ -455,9 +466,93 @@ async function adminCodes() {
   await refresh();
 }
 
+// ---------- forms: fill in fields, send the command as the member ----------
+const FORMS = {
+  task: {
+    title: "➕ 新增任務 New task",
+    fields: [
+      { key: "title", label: "要做什麼 What", type: "text", required: true, placeholder: "例：租鷹架" },
+      { key: "owner", label: "負責人 Owner（可留空）", type: "text", placeholder: "例：阿明" },
+      { key: "due", label: "期限 Due（可留空）", type: "date" },
+    ],
+    command: (v) => ["/add", v.title, v.owner && "@" + v.owner.replace(/\s+/g, ""), v.due && md(v.due)].filter(Boolean).join(" "),
+  },
+  done: {
+    title: "✅ 完成回報 Report done",
+    fields: [
+      { key: "id", label: "任務編號 Task #", type: "number", required: true, placeholder: "例：3" },
+      { key: "report", label: "現況 What happened", type: "textarea", required: true, placeholder: "例：租到 2 台，週五下午可以取" },
+    ],
+    command: (v) => "/task done " + v.id + " " + v.report.replace(/\s+/g, " "),
+  },
+  tool: counterForm("tool", "🔧 工具 Tools", "例：線鋸"),
+  material: counterForm("material", "🧱 材料 Materials", "例：螺絲"),
+};
+
+function counterForm(cmd, title, example) {
+  return {
+    title,
+    fields: [
+      { key: "name", label: "名稱 Name", type: "text", required: true, placeholder: example },
+      { key: "mode", label: "要做什麼 Action", type: "select", options: [["add", "增加 Add"], ["sub", "減少 Remove"], ["set", "設定為 Set to"]] },
+      { key: "qty", label: "數量 Quantity", type: "number", required: true, placeholder: "1" },
+    ],
+    command: (v) => (v.mode === "set" ? "/" + cmd + " set " + v.name + " " + v.qty : "/" + cmd + " " + v.name + " " + (v.mode === "sub" ? "-" : "") + Math.abs(Number(v.qty))),
+  };
+}
+
+/** "2026-10-20" → "10/20". */
+const md = (iso) => Number(iso.slice(5, 7)) + "/" + Number(iso.slice(8, 10));
+
+async function formPage(kind, liffId) {
+  const form = FORMS[kind];
+  if (!form) throw new Error("沒有這個表單 Unknown form");
+  if (liffId) await initLiff(liffId);
+  const inputs = {};
+  const rows = form.fields.map((f) => {
+    let el;
+    if (f.type === "select") el = h("select", {}, f.options.map(([v, label]) => h("option", { value: v }, label)));
+    else if (f.type === "textarea") el = h("textarea", { placeholder: f.placeholder || "" });
+    else el = h("input", { type: f.type, placeholder: f.placeholder || "", min: f.type === "number" ? 0 : null, inputmode: f.type === "number" ? "numeric" : null });
+    inputs[f.key] = el;
+    return h("label", { class: "field", style: "margin-bottom:12px" }, f.label, el);
+  });
+  const preview = h("p", { class: "muted" });
+  const values = () => Object.fromEntries(Object.entries(inputs).map(([k, el]) => [k, el.value.trim()]));
+  const refresh = () => { preview.textContent = "將送出 Will send：" + form.command(values()); };
+  Object.values(inputs).forEach((el) => el.addEventListener("input", refresh));
+  const submit = h("button", { class: "primary", onclick: async () => {
+    const v = values();
+    const missing = form.fields.find((f) => f.required && !v[f.key]);
+    if (missing) return toast("請填寫：" + missing.label);
+    const command = form.command(v);
+    submit.disabled = true;
+    try {
+      // Needs the LIFF app's chat_message.write scope and the form opened from the group chat.
+      await liff.sendMessages([{ type: "text", text: command }]);
+      toast("✅ 已送出 Sent");
+      setTimeout(() => liff.closeWindow(), 600);
+    } catch (err) {
+      console.error(err);
+      // Outside LINE, or without the scope: let them copy the command instead.
+      $app.append(h("div", { class: "card" }, h("p", { class: "error" }, "無法直接送出，請複製下面的指令貼到群組：\nCould not send; copy this into the group:"),
+        h("p", {}, h("code", {}, command)), h("button", { onclick: () => copyText(command) }, "📋 複製 Copy")));
+    } finally { submit.disabled = false; }
+  } }, "送出 Send");
+  $app.replaceChildren(h("h1", {}, form.title), h("div", { class: "card" }, rows, preview, submit));
+  refresh();
+}
+
 // ---------- start ----------
 (async () => {
   try {
+    // Before liff.init, LINE delivers "?form=task" wrapped in liff.state.
+    const params = new URLSearchParams(location.search);
+    const kind = params.get("form") || new URLSearchParams((params.get("liff.state") || "").replace(/^[^?]*\?/, "")).get("form");
+    if (kind) {
+      const config = await api("/api/config");
+      return await formPage(kind, config.liffId);
+    }
     const res = await signIn();
     const target = res.groupId || new URLSearchParams(location.search).get("group");
     if (target) {

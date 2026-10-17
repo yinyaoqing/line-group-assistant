@@ -18,6 +18,8 @@ export interface Env {
   LOGIN_CHANNEL_ID?: string;
   /** Comma-separated LINE Login user IDs allowed into the platform admin page. */
   PLATFORM_ADMINS?: string;
+  /** Claude model for "@bot" requests; defaults to DEFAULT_AI_MODEL in core/assistant.ts. */
+  AI_MODEL?: string;
   /** "1" only in local development: lets the settings page skip LINE Login. Never set in production. */
   DEV_MODE?: string;
 }
@@ -72,7 +74,11 @@ export interface PluginContext {
   settings: Record<string, unknown>;
   /** Resolve a member's display name; returns undefined if LINE won't say. */
   displayName(userId: string | undefined): Promise<string | undefined>;
-  /** Push messages to the group. Counts against the monthly message quota. */
+  /**
+   * Send to the group outside a reply (scheduled jobs). By default it waits for
+   * the group's next event and rides on that free reply; groups set to "push"
+   * get it at once, which counts against the monthly message quota.
+   */
   push(messages: LineMessage[]): Promise<void>;
   /** The group's plan in force (expired paid plans count as free). */
   plan: Plan;

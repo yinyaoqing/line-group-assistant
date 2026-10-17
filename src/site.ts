@@ -141,7 +141,7 @@ export function siteHtml(origin: string): string {
 <body>
 <header>
   <div class="wrap">
-    <a class="brand" href="#top"><i>工</i>${name} <small>${esc(SITE.tagline)}</small></a>
+    <a class="brand" href="#top"><i>${esc(SITE.mark)}</i>${name} <small>${esc(SITE.tagline)}</small></a>
     <nav><a href="#features">功能</a><a href="#how">開始使用</a><a href="#pricing">方案</a><a href="#faq">常見問題</a></nav>
     <a class="btn small" href="${join}">加入 LINE 洽詢</a>
   </div>
@@ -158,16 +158,17 @@ export function siteHtml(origin: string): string {
         <a class="btn ghost" href="#pricing">看訂閱方案</a>
       </div>
       <p class="langs">支援 ${langList(Object.keys(LANGUAGES))}</p>
+      <p class="langs">📜 ${esc(SITE.story)}</p>
     </div>
 
     <div class="phone" role="img" aria-label="群組對話示意：中文與越南文自動互譯、新增任務、完成回報">
       <div class="top">🏗️ 南港工地群組（12）</div>
       <div class="msg"><div class="av" style="background:#e07a3f">明</div><div><div class="who">阿明</div><div class="b">明天早上七點工地集合，記得帶安全帽</div></div></div>
-      <div class="msg"><div class="av" style="background:var(--green)">工</div><div><div class="who">${name}</div><div class="b bot">🌐 阿明<br>🇻🇳 Sáng mai 7 giờ tập trung tại công trường, nhớ mang mũ bảo hộ.<br>🇺🇸 Meet at the site at 7am tomorrow, bring your helmet.</div></div></div>
+      <div class="msg"><div class="av" style="background:var(--green)">${esc(SITE.mark)}</div><div><div class="who">${name}</div><div class="b bot">🌐 阿明<br>🇻🇳 Sáng mai 7 giờ tập trung tại công trường, nhớ mang mũ bảo hộ.<br>🇺🇸 Meet at the site at 7am tomorrow, bring your helmet.</div></div></div>
       <div class="msg"><div class="av" style="background:#7a5ad6">T</div><div><div class="who">Tuấn</div><div class="b">Dạ, em sẽ mang thêm máy cưa.</div></div></div>
-      <div class="msg"><div class="av" style="background:var(--green)">工</div><div><div class="who">${name}</div><div class="b bot">🌐 Tuấn：好的，我會多帶一台鋸子。</div></div></div>
+      <div class="msg"><div class="av" style="background:var(--green)">${esc(SITE.mark)}</div><div><div class="who">${name}</div><div class="b bot">🌐 Tuấn：好的，我會多帶一台鋸子。</div></div></div>
       <div class="msg me"><div class="b">/add 租鷹架 @Tuấn 10/20</div></div>
-      <div class="msg"><div class="av" style="background:var(--green)">工</div><div><div class="who">${name}</div><div class="b bot">➕ #3 租鷹架 / Thuê giàn giáo<small>👤 Tuấn　⏰ 10/20　[未開始]</small></div></div></div>
+      <div class="msg"><div class="av" style="background:var(--green)">${esc(SITE.mark)}</div><div><div class="who">${name}</div><div class="b bot">➕ #3 租鷹架 / Thuê giàn giáo<small>👤 Tuấn　⏰ 10/20　[未開始]</small></div></div></div>
       <div class="chips"><span>🌐 翻譯</span><span>📋 任務</span><span>🔧 工具</span><span>🧱 材料</span><span>📱 選單</span></div>
     </div>
   </div>
@@ -215,6 +216,7 @@ export function siteHtml(origin: string): string {
             ${check("報表匯出 CSV／PDF")}
             ${check("每週一推播進度摘要", free.digest)}
             ${check("越南文、印尼文、泰文等東南亞語言", false)}
+            ${check("AI 助理：@機器人用說的就能操作", free.ai)}
           </ul>
           <a class="btn ghost" href="${join}">免費開始</a>
         </div>
@@ -228,6 +230,7 @@ export function siteHtml(origin: string): string {
             ${check("任務、完成回報、工具材料數量")}
             ${check("報表匯出 CSV／PDF")}
             ${check("每週一推播進度摘要", pro.digest)}
+            ${check("AI 助理：@機器人用說的就能操作，任何語言都可以", pro.ai)}
             ${check("專有名詞詞彙表（Claude 引擎）")}
           </ul>
           <a class="btn" href="${join}">升級專業版</a>

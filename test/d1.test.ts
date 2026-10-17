@@ -5,11 +5,13 @@ import { D1AdminRepo } from "../src/storage/admins";
 import { D1ChannelRepo } from "../src/storage/channels";
 import { D1CodeRepo, formatCode } from "../src/storage/codes";
 import { D1Storage } from "../src/storage/d1";
+import { D1OutboxRepo } from "../src/storage/outbox";
 import { D1GroupRepo, D1UsageMeter, monthKey } from "../src/storage/groups";
 import init from "../migrations/0001_init.sql?raw";
 import v2 from "../migrations/0002_admins_channels_plans.sql?raw";
 import v3 from "../migrations/0003_split_items.sql?raw";
 import v4 from "../migrations/0004_activation_codes.sql?raw";
+import v5 from "../migrations/0005_outbox.sql?raw";
 
 // Runs the real SQL against a local, in-memory D1 (workerd via wrangler).
 let proxy: PlatformProxy<{ DB: D1Database }>;
@@ -18,7 +20,7 @@ let db: D1Database;
 beforeAll(async () => {
   proxy = await getPlatformProxy<{ DB: D1Database }>({ persist: false });
   db = proxy.env.DB;
-  const sql = [init, v2, v3, v4].join(";\n").replace(/--.*$/gm, "");
+  const sql = [init, v2, v3, v4, v5].join(";\n").replace(/--.*$/gm, "");
   const statements = sql.split(";").map((s: string) => s.trim()).filter(Boolean);
   await db.batch(statements.map((s: string) => db.prepare(s)));
 }, 60_000);
@@ -140,5 +142,19 @@ describe("D1CodeRepo", () => {
     expect(await repo.redeem(late.code, "default", "Cz", "U3", now)).toBeUndefined(); // expired
     expect(await repo.revoke(late.code)).toBe(true);
     expect((await repo.list()).map((c) => c.code)).toEqual([code.code]);
+  });
+});
+
+describe("D1OutboxRepo", () => {
+  it("takes the oldest messages per group, each only once", async () => {
+    const repo = new D1OutboxRepo(db);
+    await repo.add("Co", [{ type: "text", text: "1" }, { type: "text", text: "2" }, { type: "text", text: "3" }]);
+    await repo.add("Cother", [{ type: "text", text: "x" }]);
+    const [a, b] = await Promise.all([repo.take("Co", 2), repo.take("Co", 2)]);
+    const texts = [...a, ...b].map((m) => (m as { text: string }).text).sort();
+    expect(texts).toEqual(["1", "2", "3"]);
+    expect(await repo.take("Co", 5)).toEqual([]);
+    expect(await repo.take("Cother", 0)).toEqual([]);
+    expect((await repo.take("Cother", 5)).length).toBe(1);
   });
 });

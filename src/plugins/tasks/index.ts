@@ -171,7 +171,9 @@ export const tasks: Plugin = {
     const done = all.filter((r) => r.status === STATUS.done).length;
     const failed = all.filter((r) => r.status === STATUS.failed).length;
     const closed = `完成 Done ${done}${failed ? `、失敗 Failed ${failed}` : ""}`;
-    await ctx.push([text(`🗓 每週進度 Weekly progress\n${closed}／共 Total ${all.length}\n\n${open.map(fmt).join("\n")}`)]);
+    // May be delivered later, with the group's next reply, so say when it was compiled.
+    const asOf = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(5, 16).replace("-", "/").replace("T", " ");
+    await ctx.push([text(`🗓 每週進度 Weekly progress（${asOf} 統計）\n${closed}／共 Total ${all.length}\n\n${open.map(fmt).join("\n")}`)]);
   },
 };
 

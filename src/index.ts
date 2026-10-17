@@ -11,6 +11,7 @@ import { D1AdminRepo } from "./storage/admins";
 import { D1ChannelRepo } from "./storage/channels";
 import { D1CodeRepo } from "./storage/codes";
 import { D1Storage } from "./storage/d1";
+import { D1OutboxRepo } from "./storage/outbox";
 import { D1GroupRepo, D1UsageMeter } from "./storage/groups";
 import { MemoryStorage } from "./storage/memory";
 import { SheetsStorage } from "./storage/sheets";
@@ -86,6 +87,7 @@ async function webhook(req: Request, env: Env, ctx: ExecutionContext, channelId:
     plugins,
     storageFor: storageFor(env),
     origin,
+    outbox: new D1OutboxRepo(env.DB),
   };
   // Answer LINE at once; do the work (translation, storage) in the background.
   ctx.waitUntil(Promise.all(events.map((e) => handleEvent(e, deps).catch((err) => console.error(err)))));
@@ -138,7 +140,7 @@ export default {
   },
 
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    const deps = { env, groups: new D1GroupRepo(env.DB), usage: new D1UsageMeter(env.DB), plugins, storageFor: storageFor(env) };
+    const deps = { env, groups: new D1GroupRepo(env.DB), usage: new D1UsageMeter(env.DB), plugins, storageFor: storageFor(env), outbox: new D1OutboxRepo(env.DB) };
     ctx.waitUntil(handleSchedule(event.cron, deps, lineFor(env)));
   },
 } satisfies ExportedHandler<Env>;

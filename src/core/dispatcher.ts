@@ -3,8 +3,10 @@ import { effectivePlan } from "../../config/plans";
 import type { AdminRepo } from "../storage/admins";
 import type { ActivationCode, CodeRepo } from "../storage/codes";
 import type { GroupRepo, UsageMeter } from "../storage/groups";
+import type { OutboxRepo } from "../storage/outbox";
 import type { Storage } from "../storage/types";
 import { buildReport, reportUrl, summaryText } from "../report";
+import { AI_METRIC, gatherContext, interpret, isReadOnly, stripSelfMention } from "./assistant";
 import { randomId, signToken } from "./crypto";
 import type { LineApi } from "./line";
 import type { Env, GroupConfig, LineEvent, LineMessage, Plugin, PluginContext } from "./types";
@@ -30,14 +32,25 @@ export interface Deps {
   storageFor(group: GroupConfig): Storage;
   /** This Worker's public origin, for links the bot sends (reports). */
   origin: string;
+  /** Where scheduled sends wait for the next free reply; without it they are pushed. */
+  outbox?: OutboxRepo;
 }
+
+/** LINE accepts at most this many messages per reply. */
+const MAX_REPLY_MESSAGES = 5;
+
+/**
+ * How a group gets scheduled messages: "reply" (default) waits for the next
+ * event and rides on its free reply; "push" sends at once, using LINE quota.
+ */
+export const notifyMode = (group: GroupConfig): "reply" | "push" => (group.settings?.core?.notify === "push" ? "push" : "reply");
 
 /** How long a /settings link stays valid. */
 export const LINK_TTL_SECONDS = 10 * 60;
 
 const groupIdOf = (e: LineEvent) => e.source.groupId ?? e.source.roomId;
 
-function context(deps: Pick<Deps, "env" | "usage" | "storageFor">, line: LineApi, group: GroupConfig, plugin: Plugin): PluginContext {
+function context(deps: Pick<Deps, "env" | "usage" | "storageFor" | "outbox">, line: LineApi, group: GroupConfig, plugin: Plugin): PluginContext {
   const names = new Map<string, string | undefined>();
   return {
     env: deps.env,
@@ -56,7 +69,8 @@ function context(deps: Pick<Deps, "env" | "usage" | "storageFor">, line: LineApi
       }
       return names.get(userId);
     },
-    push: (messages) => line.push(group.groupId, messages),
+    push: (messages) =>
+      deps.outbox && notifyMode(group) === "reply" ? deps.outbox.add(group.groupId, messages) : line.push(group.groupId, messages),
     usage: {
       get: (metric) => deps.usage.get(group.groupId, metric),
       add: (metric, amount) => deps.usage.add(group.groupId, metric, amount),
@@ -84,9 +98,39 @@ const MENU: QuickItem = { label: "📱 選單 Menu", text: "/menu" };
  * /menu: every feature as a big button. Unlike quick replies, which LINE shows
  * only on phones, card buttons also work in LINE for PC and Mac.
  */
+/** Forms per plugin, opened in LINE (LIFF); each sends the matching command as the member. */
+const FORMS: { plugin: string; label: string; form: string }[] = [
+  { plugin: "tasks", label: "➕ 新增任務 New task", form: "task" },
+  { plugin: "tasks", label: "✅ 完成回報 Report done", form: "done" },
+  { plugin: "tools", label: "🔧 工具增減 Tools", form: "tool" },
+  { plugin: "materials", label: "🧱 材料增減 Materials", form: "material" },
+];
+
+/**
+ * /form: buttons that open fill-in forms in LINE. URI buttons work on LINE for
+ * PC too; the form must be opened from the group so it can send into it.
+ */
+export function formCard(active: Plugin[], liffId: string | undefined): LineMessage {
+  const names = new Set(active.map((p) => p.name));
+  const forms = FORMS.filter((f) => names.has(f.plugin));
+  if (!liffId || !forms.length) return text("⚠️ 表單尚未開通 Forms are not set up yet.");
+  return {
+    type: "template",
+    altText: "📝 表單 Forms",
+    template: {
+      type: "buttons",
+      text: "📝 用表單填寫，送出後會用你的名義在群組發出指令\nFill in a form; it is sent to the group as you.",
+      actions: forms.slice(0, 4).map((f) => ({ type: "uri", label: f.label.slice(0, 20), uri: `https://liff.line.me/${liffId}?form=${f.form}` })),
+    },
+  };
+}
+
+const FORM: QuickItem = { label: "📝 表單 Forms", text: "/form" };
+
 export function menuCard(active: Plugin[]): LineMessage {
   const items: QuickItem[] = [
     ...active.flatMap((p) => p.quickReplies ?? []),
+    FORM,
     { label: "📊 報表 Report", text: "/report" },
     TEMPLATES,
     { label: "⚙️ 設定 Settings", text: "/settings" },
@@ -129,7 +173,7 @@ export function helpText(active: Plugin[]): string {
     "📖 使用說明 How to use",
     "👆 最快：點輸入框上方的按鈕；按鈕不見時輸入 /m 叫出來（電腦版 LINE 沒有這排按鈕，請輸入 /menu）\n📝 要打字：輸入 /template 拿範本，按「複製」→ 貼到輸入框 → 改內容 → 送出",
     ...sections,
-    "📊 /report　匯出報表（Excel／PDF）\n⚙️ /settings　設定頁（管理員）\n👥 /admin　管理員名單",
+    "📝 /form　用表單填寫，不用打指令\n🤖 @我 加上你想做的事，用說的就好，任何語言都可以（專業版）\n📊 /report　匯出報表（Excel／PDF）\n⚙️ /settings　設定頁（管理員）\n👥 /admin　管理員名單",
   ].join("\n\n");
 }
 
@@ -226,25 +270,32 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
 
   if (group?.status !== "active") return;
   const active = group.plugins.map((n) => deps.plugins[n]).filter((p): p is Plugin => !!p);
-  const quick = [...active.flatMap((p) => p.quickReplies ?? []), MENU, TEMPLATES, HELP];
+  const quick = [...active.flatMap((p) => p.quickReplies ?? []), FORM, MENU, TEMPLATES, HELP];
 
   /**
    * Reply with the quick reply buttons on the last message (shown on phones only).
-   * After a button tap, say who tapped, since nothing appeared in the chat. Then
-   * hand plugins the LINE IDs of the messages they tagged, so quotes map back.
+   * After a button tap, say who tapped, since nothing appeared in the chat.
+   * Messages queued for this group (e.g. the weekly digest) ride along first,
+   * even when the event itself needs no reply, since replies are free and
+   * pushes are not. Then hand plugins the LINE IDs of the messages they
+   * tagged, so quotes map back.
    */
   const sendQ = async (messages: LineMessage[]) => {
-    if (!event.replyToken || !messages.length) return;
-    const out = messages.map((m, i) => (i === messages.length - 1 ? withQuickReply(m, quick) : m));
-    const first = out[0] as { type?: string; text?: string };
-    if (viaButton && userId && first.type === "text") {
+    if (!event.replyToken) return;
+    const own = [...messages];
+    const first = own[0] as { type?: string; text?: string } | undefined;
+    if (viaButton && userId && first?.type === "text") {
       const who = await deps.line.groupMemberName(group.groupId, userId).catch(() => undefined);
       if (who) {
-        const t = tagOf(out[0]!);
-        out[0] = { ...out[0], text: `👆 ${who}\n${first.text}` };
-        if (t) tag(out[0], t.plugin, t.key);
+        const t = tagOf(own[0]!);
+        own[0] = { ...own[0], text: `👆 ${who}\n${first.text}` };
+        if (t) tag(own[0], t.plugin, t.key);
       }
     }
+    const queued = deps.outbox ? await deps.outbox.take(group.groupId, MAX_REPLY_MESSAGES - own.length).catch(() => []) : [];
+    const all = [...queued, ...own];
+    if (!all.length) return;
+    const out = all.map((m, i) => (i === all.length - 1 ? withQuickReply(m, quick) : m));
     const ids = await deps.line.reply(event.replyToken, out);
     if (!ids) return;
     for (const [i, m] of out.entries()) {
@@ -266,8 +317,18 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
     return sendQ(replies.slice(0, 5));
   }
 
-  if (!input) return;
-  if (viaButton && !pre) return; // buttons only ever stand for commands
+  // Stickers, photos, non-command taps: nothing to answer, but queued messages can still go out.
+  if (!input) return sendQ([]);
+  if (viaButton && !pre) return sendQ([]); // buttons only ever stand for commands
+
+  // "@bot …" in plain words: the AI assistant turns it into a command.
+  const mentionees = event.message?.mention?.mentionees ?? [];
+  if (!pre && mentionees.some((m) => m.isSelf)) {
+    const reply = await assistantReply(stripSelfMention(input, mentionees), group, active, userId, deps);
+    if (reply.run) return handleEvent({ ...event, message: { type: "text", id: event.message!.id, text: reply.run } }, deps);
+    return sendQ(reply.messages);
+  }
+
   const raw = input;
   const cmd = pre;
   const replies: LineMessage[] = [];
@@ -276,6 +337,7 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   if (pre?.name === "admin") return sendQ([text(await adminCommand(group, pre.args, userId, event, deps))]);
   if (pre?.name === "report") return sendQ(await reportReply(group, deps));
   if (pre?.name === "menu") return sendQ([menuCard(active)]);
+  if (pre?.name === "form") return sendQ([formCard(active, deps.env.LIFF_ID)]);
   // /m: the smallest reply that can carry the quick reply buttons, for phones.
   if (pre?.name === "m") return sendQ([text("👇")]);
 
@@ -316,6 +378,52 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   // included) is as close to always-on as a group allows.
   const out = replies.slice(0, 5);
   await sendQ(out);
+}
+
+/**
+ * What to do with "@bot <request>": run a read-only command straight away, ask
+ * for a tap to confirm anything that changes data, or answer in words.
+ */
+async function assistantReply(
+  request: string,
+  group: GroupConfig,
+  active: Plugin[],
+  userId: string | undefined,
+  deps: Deps,
+): Promise<{ run?: string; messages: LineMessage[] }> {
+  const say = (msg: string) => ({ messages: [text(msg)] });
+  if (!effectivePlan(group.plan, group.planUntil).ai) {
+    return say("🤖 用說的操作（AI 助理）是專業版功能。\nAI requests are a Pro feature. 輸入 /menu 用按鈕操作。");
+  }
+  if (!deps.env.ANTHROPIC_API_KEY) return say("⚠️ AI 助理尚未開通（缺少 ANTHROPIC_API_KEY）。");
+  if (!request) return say("🤖 有什麼需要幫忙？例如：「@我 新增任務 明天買螺絲 給阿明」\nHow can I help? e.g. \"@me add a task: buy screws tomorrow\"");
+
+  const ctx = context(deps, deps.line, group, { name: "assistant" });
+  try {
+    const [data, speaker] = await Promise.all([gatherContext(ctx), ctx.displayName(userId).then((n) => n ?? "member")]);
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const decision = await interpret(deps.env, { request, speaker, plugins: active, today, ...data });
+    await ctx.usage.add(AI_METRIC, 1);
+    if (decision.kind === "answer") return say(`🤖 ${decision.reply}`);
+    if (isReadOnly(decision.command)) return { run: decision.command, messages: [] };
+    // Anything that changes data waits for a tap, so a misread request is never applied silently.
+    return {
+      messages: [
+        {
+          type: "template",
+          altText: `🤖 ${decision.reply}`.slice(0, 400),
+          template: {
+            type: "buttons",
+            text: `🤖 ${decision.reply}\n${decision.command}`.slice(0, 160),
+            actions: [action({ label: "✓ 執行 Confirm", text: decision.command })],
+          },
+        },
+      ],
+    };
+  } catch (err) {
+    console.error("assistant failed", err);
+    return say("⚠️ AI 助理暫時無法使用，請改用 /menu 或指令。\nThe assistant is unavailable right now.");
+  }
 }
 
 /**
@@ -438,7 +546,7 @@ async function adminCommand(group: GroupConfig, args: string[], userId: string |
 /** Cron entry: run every active group's plugins that have onSchedule, each through its own channel. */
 export async function handleSchedule(
   cron: string,
-  deps: Pick<Deps, "env" | "groups" | "usage" | "plugins" | "storageFor">,
+  deps: Pick<Deps, "env" | "groups" | "usage" | "plugins" | "storageFor" | "outbox">,
   lineFor: (channelId: string) => Promise<LineApi | undefined>,
 ): Promise<void> {
   for (const group of await deps.groups.listActive()) {

@@ -192,6 +192,7 @@ async function groupView(group: GroupConfig, deps: ApiDeps) {
       monthlyChars: typeof t.monthlyChars === "number" ? t.monthlyChars : null,
     },
     tasks: { digest: group.settings?.tasks?.digest === true },
+    notify: group.settings?.core?.notify === "push" ? "push" : "reply",
     usage: { translateChars: await deps.usage.get(group.groupId, USAGE_METRIC), limit: monthlyLimit(t, plan) },
     languages: Object.entries(LANGUAGES).map(([code, l]) => ({ code, name: l.name, flag: l.flag, allowed: plan.languages.includes(code as never) })),
     admins,
@@ -202,6 +203,8 @@ interface SettingsBody {
   plugins?: unknown;
   translate?: { languages?: unknown; trigger?: unknown; targetMode?: unknown; showName?: unknown; minLength?: unknown; glossary?: unknown };
   tasks?: { digest?: unknown };
+  /** How scheduled messages reach the group: "reply" (free, with the next event) or "push" (at once, uses quota). */
+  notify?: unknown;
 }
 
 /** What group admins may change. Engine and quota stay with platform admins. */
@@ -241,6 +244,10 @@ export function applySettings(group: GroupConfig, b: SettingsBody, plugins: Reco
   if (bt?.glossary !== undefined) {
     if (typeof bt.glossary !== "string" || bt.glossary.length > 2000) throw new HttpError(400, "詞彙表最多 2000 字");
     t.glossary = bt.glossary.trim();
+  }
+  if (b.notify !== undefined) {
+    if (b.notify !== "reply" && b.notify !== "push") throw new HttpError(400, "notify 只能是 reply 或 push");
+    settings.core = { ...(settings.core ?? {}), notify: b.notify };
   }
   if (b.tasks?.digest !== undefined) {
     if (b.tasks.digest === true && !plan.digest) throw new HttpError(403, "每週摘要需要專業版 Weekly digest needs Pro");

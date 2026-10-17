@@ -197,7 +197,7 @@ describe("tasks plugin", () => {
     await handleEvent(msg("/add 買早餐 @JOJO 10/17"), deps);
     const added = replies[0]?.[0] as { text: string; quickReply: { items: { action: { data: string } }[] } };
     expect(added.text).toContain("#1 買早餐 [未開始] 👤JOJO ⏰10/17");
-    expect(added.quickReply.items.map((i) => i.action.data)).toEqual(["/task start 1", "/task done 1", "/todo", "/menu", "/template", "/help"]);
+    expect(added.quickReply.items.map((i) => i.action.data)).toEqual(["/task start 1", "/task done 1", "/todo", "/form", "/menu", "/template", "/help"]);
 
     await handleEvent(msg("／Todo"), deps);
     const card = replies[1]?.[0] as { type: string; altText: string };

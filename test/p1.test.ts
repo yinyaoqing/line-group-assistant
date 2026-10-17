@@ -342,7 +342,7 @@ describe("quick replies", () => {
     const spy = vi.spyOn(engines, "google").mockResolvedValue({ text: "Good morning" });
     await handleEvent(msg("大家早安"), w.deps);
     const reply = w.replies[0]?.[0] as { quickReply: { items: { action: { data: string } }[] } };
-    expect(reply.quickReply.items.map((i) => i.action.data)).toEqual(["/translate", "/todo", "/tool", "/material", "/menu", "/template", "/help"]);
+    expect(reply.quickReply.items.map((i) => i.action.data)).toEqual(["/translate", "/todo", "/tool", "/material", "/form", "/menu", "/template", "/help"]);
     spy.mockRestore();
   });
 });
@@ -566,7 +566,7 @@ describe("menu and always-on quick replies", () => {
     const card = w.replies[0]?.[0] as { type: string };
     expect(card.type).toBe("flex");
     const sends = JSON.stringify(card).match(/"type":"postback","label":"[^"]+","data":"([^"]+)"/g)!.map((s) => s.replace(/.*"data":"/, "").replace(/"$/, ""));
-    expect(sends.slice(0, 8)).toEqual(["/translate", "/todo", "/tool", "/material", "/report", "/template", "/settings", "/help"]);
+    expect(sends.slice(0, 8)).toEqual(["/translate", "/todo", "/tool", "/material", "/form", "/report", "/template", "/settings"]);
   });
 
   it("rides on /report, /settings and /admin replies too", async () => {
@@ -689,7 +689,7 @@ describe("/m", () => {
     const reply = w.replies[0]?.[0] as { text: string; quickReply: { items: { action: { data: string } }[] } };
     expect(w.replies[0]).toHaveLength(1);
     expect(reply.text).toBe("👇");
-    expect(reply.quickReply.items.map((i) => i.action.data)).toEqual(["/translate", "/todo", "/menu", "/template", "/help"]);
+    expect(reply.quickReply.items.map((i) => i.action.data)).toEqual(["/translate", "/todo", "/form", "/menu", "/template", "/help"]);
   });
 });
 
@@ -820,5 +820,66 @@ describe("translating only into members' languages", () => {
     await handleEvent(msg("明天七點集合"), w.deps);
     expect(spy.mock.calls.slice(-2).map((c) => c[1]).sort()).toEqual(["en", "vi"]);
     spy.mockRestore();
+  });
+});
+
+describe("free delivery of scheduled messages", () => {
+  const sticker = (): LineEvent => ({ type: "message", replyToken: "r", timestamp: 0, source: { type: "group", groupId: "Cg", userId: "U2" }, message: { type: "sticker", id: "s" } });
+
+  it("queues the weekly digest and sends it with the next reply, even a sticker's", async () => {
+    const { MemoryOutboxRepo } = await import("../src/storage/outbox");
+    const { handleSchedule } = await import("../src/core/dispatcher");
+    const w = world([active({ plan: "pro", plugins: ["tasks"], settings: { tasks: { digest: true } } })]);
+    const outbox = new MemoryOutboxRepo();
+    w.deps.outbox = outbox;
+    const pushed: LineMessage[][] = [];
+    w.deps.line.push = async (_to, m) => void pushed.push(m);
+
+    await handleEvent(msg("/add 買螺絲"), w.deps);
+    await handleSchedule("0 0 * * 1", w.deps, async () => w.deps.line);
+    expect(pushed).toHaveLength(0);
+    expect(outbox.queued.get("Cg")).toHaveLength(1);
+
+    await handleEvent(sticker(), w.deps);
+    expect(textOf(w.replies.at(-1)?.[0])).toMatch(/^🗓 每週進度 Weekly progress（\d\d\/\d\d \d\d:\d\d 統計）/);
+    expect(outbox.queued.get("Cg")).toHaveLength(0);
+  });
+
+  it("puts queued messages before the reply, within LINE's five-message limit", async () => {
+    const { MemoryOutboxRepo } = await import("../src/storage/outbox");
+    const w = world([active({ plugins: ["tasks"] })]);
+    const outbox = new MemoryOutboxRepo();
+    w.deps.outbox = outbox;
+    await outbox.add("Cg", [1, 2, 3, 4, 5, 6].map((n) => ({ type: "text", text: `queued ${n}` })));
+    await handleEvent(msg("/todo"), w.deps);
+    expect(w.replies[0]!.map(textOf)).toEqual(["queued 1", "queued 2", "queued 3", "queued 4", "✅ 目前沒有未完成的任務 No open tasks\n新增 Add: /add 內容 @負責人 10/17"]);
+    expect(outbox.queued.get("Cg")).toHaveLength(2);
+  });
+
+  it("pushes at once when the group chose push", async () => {
+    const { MemoryOutboxRepo } = await import("../src/storage/outbox");
+    const { handleSchedule } = await import("../src/core/dispatcher");
+    const w = world([active({ plan: "pro", plugins: ["tasks"], settings: { tasks: { digest: true }, core: { notify: "push" } } })]);
+    w.deps.outbox = new MemoryOutboxRepo();
+    const pushed: LineMessage[][] = [];
+    w.deps.line.push = async (_to, m) => void pushed.push(m);
+    await handleEvent(msg("/add 買螺絲"), w.deps);
+    await handleSchedule("0 0 * * 1", w.deps, async () => w.deps.line);
+    expect(pushed).toHaveLength(1);
+  });
+});
+
+describe("/form", () => {
+  it("offers a LIFF form per active feature, opened from the group", async () => {
+    const w = world([active({ plugins: ["tasks", "tools"] })]);
+    await handleEvent(msg("/form"), w.deps);
+    const card = w.replies[0]?.[0] as { type: string; template: { actions: { type: string; uri: string }[] } };
+    expect(card.type).toBe("template");
+    expect(card.template.actions.map((a) => a.uri)).toEqual([
+      "https://liff.line.me/123-abc?form=task",
+      "https://liff.line.me/123-abc?form=done",
+      "https://liff.line.me/123-abc?form=tool",
+    ]);
+    expect(card.template.actions.every((a) => a.type === "uri")).toBe(true);
   });
 });

@@ -9,15 +9,17 @@ export interface Plan {
   monthlyChars: number;
   /** Languages a group on this plan may choose. */
   languages: LangCode[];
-  /** Weekly task digest (push messages cost LINE quota). */
+  /** Weekly task digest. */
   digest: boolean;
+  /** "@bot" requests in plain words, understood by Claude. */
+  ai: boolean;
 }
 
 export type PlanId = "free" | "pro";
 
 export const PLANS: Record<PlanId, Plan> = {
-  free: { id: "free", name: "免費 Free", price: 0, monthlyChars: 50_000, languages: ["zh-TW", "en"], digest: false },
-  pro: { id: "pro", name: "專業版 Pro", price: 249, monthlyChars: 500_000, languages: LANG_CODES, digest: true },
+  free: { id: "free", name: "免費 Free", price: 0, monthlyChars: 50_000, languages: ["zh-TW", "en"], digest: false, ai: false },
+  pro: { id: "pro", name: "專業版 Pro", price: 249, monthlyChars: 500_000, languages: LANG_CODES, digest: true, ai: true },
 };
 
 /**
