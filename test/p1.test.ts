@@ -235,10 +235,11 @@ describe("settings API", () => {
     const link = await signToken(SECRET, "link", { g: "Cg", u: "U1", n: "nonce-1" }, 600);
 
     expect((await call(api, "POST", "/api/session", { idToken: "bad", link })).status).toBe(401);
-    const s = await call(api, "POST", "/api/session", { idToken: "ok:login-1", link });
-    expect(s.data).toMatchObject({ groupId: "Cg", sub: "login-1" });
+    // Default channel: chat and login share a provider, so the admin signs in as the same user ID.
+    const s = await call(api, "POST", "/api/session", { idToken: "ok:U1", link });
+    expect(s.data).toMatchObject({ groupId: "Cg", sub: "U1" });
     // Same link again from a different account is refused.
-    expect((await call(api, "POST", "/api/session", { idToken: "ok:login-2", link })).status).toBe(400);
+    expect((await call(api, "POST", "/api/session", { idToken: "ok:login-2", link })).status).toBe(403);
 
     const session = s.data.session as string;
     expect((await call(api, "GET", "/api/me", undefined, session)).data.groups).toEqual([
@@ -881,5 +882,69 @@ describe("/form", () => {
       "https://liff.line.me/123-abc?form=tool",
     ]);
     expect(card.template.actions.every((a) => a.type === "uri")).toBe(true);
+  });
+});
+
+describe("settings link hijack protection", () => {
+  const call = async (deps: ApiDeps, method: string, path: string, body?: unknown) => {
+    const res = await handleApi(
+      new Request("https://bot.example" + path, { method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }),
+      deps,
+    );
+    return { status: res.status, data: (await res.json()) as Record<string, any> };
+  };
+
+  it("refuses a default-channel link opened by someone else, and keeps it usable for the admin", async () => {
+    const w = world([active()]);
+    await w.admins.add("Cg", "U1", "owner");
+    const api = w.api();
+    const link = await signToken(SECRET, "link", { g: "Cg", u: "U1", n: "nonce-2", c: "default" }, 600);
+    const grab = await call(api, "POST", "/api/session", { idToken: "ok:U2", link });
+    expect(grab.status).toBe(403);
+    expect(grab.data.error).toContain("/settings");
+    expect((await w.admins.get("Cg", "U1"))?.loginSub).toBeUndefined();
+    expect((await call(api, "POST", "/api/session", { idToken: "ok:U1", link })).status).toBe(200);
+    expect((await w.admins.get("Cg", "U1"))?.loginSub).toBe("U1");
+  });
+
+  it("on a white-label channel, waits until the admin types the code in the group", async () => {
+    const w = world([active()]);
+    await w.admins.add("Cg", "U1", "owner");
+    const api = w.api();
+    const link = await signToken(SECRET, "link", { g: "Cg", u: "U1", n: "nonce-3", c: "acme" }, 600);
+    const first = await call(api, "POST", "/api/session", { idToken: "ok:login-9", link });
+    expect(first.status).toBe(202);
+    const code = first.data.confirm.code as string;
+    expect(code).toMatch(/^\d{6}$/);
+    expect(first.data.session).toBeUndefined();
+    // Polling returns the same code until it is confirmed.
+    expect((await call(api, "POST", "/api/session", { idToken: "ok:login-9", link })).data.confirm.code).toBe(code);
+
+    // Someone else in the group cannot confirm it, nor can a wrong code.
+    await handleEvent(msg(`/confirm ${code}`, "U2"), w.deps);
+    expect(textOf(w.replies[0]?.[0])).toContain("❌");
+    await handleEvent(msg("/confirm 000000"), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toContain("❌");
+    expect((await w.admins.get("Cg", "U1"))?.loginSub).toBeUndefined();
+
+    await handleEvent(msg(`/confirm ${code}`), w.deps);
+    expect(textOf(w.replies[2]?.[0])).toContain("login-9");
+    expect((await w.admins.get("Cg", "U1"))?.loginSub).toBe("login-9");
+    const done = await call(api, "POST", "/api/session", { idToken: "ok:login-9", link });
+    expect(done.status).toBe(200);
+    expect(done.data.groupId).toBe("Cg");
+    // The code is single use, and other accounts can no longer use this admin's links.
+    await handleEvent(msg(`/confirm ${code}`), w.deps);
+    expect(textOf(w.replies[3]?.[0])).toContain("❌");
+    expect((await call(api, "POST", "/api/session", { idToken: "ok:login-8", link })).status).toBe(403);
+  });
+
+  it("/settings links carry the channel they were issued on", async () => {
+    const w = world([active()]);
+    await w.admins.add("Cg", "U1", "owner");
+    await handleEvent(msg("/settings"), w.deps);
+    const tpl = w.replies[0]?.[0] as { template: { actions: { uri: string }[] } };
+    const link = await verifyToken<{ c: string }>(SECRET, "link", new URL(tpl.template.actions[0]!.uri).searchParams.get("link"));
+    expect(link?.c).toBe("default");
   });
 });

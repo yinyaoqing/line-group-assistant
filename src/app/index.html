@@ -146,7 +146,13 @@ async function signIn() {
   const link = new URLSearchParams(location.search).get("link");
   const cached = !link && store.get("session");
   if (cached) { session = cached; return { groupId: null }; }
-  const res = await api("/api/session", { method: "POST", body: JSON.stringify({ idToken, link, devSub }) });
+  let res = await api("/api/session", { method: "POST", body: JSON.stringify({ idToken, link, devSub }) });
+  // A white-label account: the admin proves it is them by typing a code in the group; keep asking until they do.
+  while (res.confirm) {
+    showConfirm(res.confirm.code);
+    await new Promise((r) => setTimeout(r, 3000));
+    res = await api("/api/session", { method: "POST", body: JSON.stringify({ idToken, link, devSub }) });
+  }
   session = res.session;
   store.set("session", session);
   if (link) {
@@ -154,6 +160,16 @@ async function signIn() {
     history.replaceState(null, "", location.pathname + (params.toString() ? "?" + params : ""));
   }
   return res;
+}
+
+function showConfirm(code) {
+  $app.replaceChildren(
+    h("h1", {}, "確認是你本人"),
+    h("div", { class: "card" },
+      h("p", {}, "這個官方帳號和登入用的帳號分屬不同的 LINE 平台，無法自動比對身分，所以要在群組裡確認一次。"),
+      h("p", {}, "請用你自己的 LINE（在群組輸入 /settings 的那一個）在群組輸入："),
+      h("p", { style: "font: 600 26px/1.4 ui-monospace, Consolas, monospace; letter-spacing: 2px; margin: 8px 0" }, "/confirm " + code),
+      h("p", { class: "muted" }, "10 分鐘內有效。只有你本人輸入才算數；如果這不是你開的連結，請不要輸入。這個頁面會自動繼續。\nValid 10 minutes. Only you can confirm; this page continues by itself.")));
 }
 
 // ---------- views ----------

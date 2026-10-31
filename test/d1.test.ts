@@ -14,6 +14,7 @@ import v3 from "../migrations/0003_split_items.sql?raw";
 import v4 from "../migrations/0004_activation_codes.sql?raw";
 import v5 from "../migrations/0005_outbox.sql?raw";
 import v6 from "../migrations/0006_accounts.sql?raw";
+import v7 from "../migrations/0007_pending_binds.sql?raw";
 
 // Runs the real SQL against a local, in-memory D1 (workerd via wrangler).
 let proxy: PlatformProxy<{ DB: D1Database }>;
@@ -22,7 +23,7 @@ let db: D1Database;
 beforeAll(async () => {
   proxy = await getPlatformProxy<{ DB: D1Database }>({ persist: false });
   db = proxy.env.DB;
-  const sql = [init, v2, v3, v4, v5, v6].join(";\n").replace(/--.*$/gm, "");
+  const sql = [init, v2, v3, v4, v5, v6, v7].join(";\n").replace(/--.*$/gm, "");
   const statements = sql.split(";").map((s: string) => s.trim()).filter(Boolean);
   await db.batch(statements.map((s: string) => db.prepare(s)));
 }, 60_000);
@@ -183,5 +184,21 @@ describe("D1AccountRepo", () => {
     expect(await codes.redeem(top.code, "default", "Cg", "U1")).toBeUndefined(); // not an activation code
     expect(await codes.redeem(top.code, "default", "Cg", "U1", new Date(), "topup")).toMatchObject({ kind: "topup", chars: 100_000 });
     expect(await codes.redeem(top.code, "default", "Cg", "U1", new Date(), "topup")).toBeUndefined();
+  });
+});
+
+describe("D1AdminRepo pending binds", () => {
+  it("issues one code per request, hands it over once to the right admin, and drops expired ones", async () => {
+    const repo = new D1AdminRepo(db);
+    const now = new Date("2026-03-18T01:00:00Z");
+    const later = new Date(now.getTime() + 601_000);
+    const code = await repo.requestBind("Cp", "U1", "login-1", "小明", now, 600_000);
+    expect(code).toMatch(/^\d{6}$/);
+    expect(await repo.requestBind("Cp", "U1", "login-1", "小明", now, 600_000)).toBe(code);
+    expect(await repo.takeBind("Cp", "U2", code, now)).toBeUndefined();
+    expect(await repo.takeBind("Cp", "U1", code, later)).toBeUndefined();
+    const fresh = await repo.requestBind("Cp", "U1", "login-1", "小明", later, 600_000);
+    expect(await repo.takeBind("Cp", "U1", fresh, later)).toMatchObject({ loginSub: "login-1", loginName: "小明", groupId: "Cp" });
+    expect(await repo.takeBind("Cp", "U1", fresh, later)).toBeUndefined();
   });
 });

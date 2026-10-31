@@ -50,7 +50,7 @@ const MAX_REPLY_MESSAGES = 5;
 export const notifyMode = (group: GroupConfig): "reply" | "push" => (group.settings?.core?.notify === "push" ? "push" : "reply");
 
 /** How long a /settings link stays valid. */
-const LINK_TTL_SECONDS = 10 * 60;
+export const LINK_TTL_SECONDS = 10 * 60;
 
 const groupIdOf = (e: LineEvent) => e.source.groupId ?? e.source.roomId;
 
@@ -361,6 +361,7 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   if (pre?.name === "menu") return sendQ([menuCard(active)]);
   if (pre?.name === "usage") return sendQ([text(await usageText(group, deps))]);
   if (pre?.name === "topup") return sendQ([text(await topUp(group, pre.args[0], userId, deps))]);
+  if (pre?.name === "confirm") return sendQ([text(await confirmBind(group, pre.args[0], userId, deps))]);
   if (pre?.name === "form") return sendQ([formCard(active, deps.env.LIFF_ID)]);
   // /m: the smallest reply that can carry the quick reply buttons, for phones.
   if (pre?.name === "m") return sendQ([text("👇")]);
@@ -552,6 +553,22 @@ async function topUp(group: GroupConfig, given: string | undefined, userId: stri
   return `✅ 已加購 ${(code.chars ?? 0).toLocaleString("en-US")} 字\n加購剩餘 Top-up left：${(updated?.bonusChars ?? 0).toLocaleString("en-US")} 字`;
 }
 
+/**
+ * /confirm <code>: finish binding a settings-page login that opened this admin's
+ * link from another provider (see session() in api.ts). The webhook's user ID
+ * is the proof: only the admin the link was issued to can confirm.
+ */
+async function confirmBind(group: GroupConfig, given: string | undefined, userId: string | undefined, deps: Deps): Promise<string> {
+  const code = (given ?? "").replace(/\D/g, "");
+  if (!code) return "用法 Usage: /confirm 123456（設定頁上顯示的 6 位數字 the 6 digits shown on the settings page）";
+  if (!userId) return "❌ 無法辨識你的身分 Could not identify you.";
+  const pending = await deps.admins.takeBind(group.groupId, userId, code, new Date());
+  if (!pending) return "❌ 確認碼不對、已過期，或不是給你的。請重新輸入 /settings。\nWrong or expired code, or not yours; send /settings again.";
+  const res = await deps.admins.bindLogin(group.groupId, userId, pending.loginSub);
+  if (res !== "ok") return "❌ 這個管理員身分已綁定其他 LINE 帳號 This admin is linked to another LINE account.";
+  return `✅ 已將 LINE 登入帳號「${pending.loginName || pending.loginSub}」綁定為你的設定頁登入，回到設定頁即可繼續。\nLinked; go back to the settings page.`;
+}
+
 /** /settings: a single-use, 10-minute link to the settings page, only for admins. */
 async function settingsLink(group: GroupConfig, userId: string | undefined, deps: Deps): Promise<LineMessage[]> {
   const admin = userId ? await deps.admins.get(group.groupId, userId) : undefined;
@@ -559,7 +576,8 @@ async function settingsLink(group: GroupConfig, userId: string | undefined, deps
   const { APP_SECRET, LIFF_ID } = deps.env;
   if (!APP_SECRET || !LIFF_ID) return [text("⚠️ 設定頁尚未開通（缺少 APP_SECRET 或 LIFF_ID）。\nThe settings page is not set up yet.")];
 
-  const token = await signToken(APP_SECRET, "link", { g: group.groupId, u: userId, n: randomId() }, LINK_TTL_SECONDS);
+  // The channel tells the API whether chat and login IDs can be compared (see session() in api.ts).
+  const token = await signToken(APP_SECRET, "link", { g: group.groupId, u: userId, n: randomId(), c: deps.channel.id }, LINK_TTL_SECONDS);
   const uri = `https://liff.line.me/${LIFF_ID}?link=${encodeURIComponent(token)}`;
   const name = (await deps.line.groupMemberName(group.groupId, userId!).catch(() => undefined)) ?? "管理員";
   return [

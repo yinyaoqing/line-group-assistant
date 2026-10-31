@@ -1,6 +1,6 @@
 import { isLangCode, LANGUAGES } from "../config/languages";
 import { effectivePlan, ENGINE_CHOICES, PLANS, TOP_UP, UPGRADE_NOTE, type PlanId } from "../config/plans";
-import { groupPlan } from "./core/dispatcher";
+import { groupPlan, LINK_TTL_SECONDS } from "./core/dispatcher";
 import { isTone, TONES } from "./plugins/translate/engines";
 import { accountUsageKey, type Account, type AccountRepo } from "./storage/accounts";
 import { encrypt, verifyToken, signToken } from "./core/crypto";
@@ -50,6 +50,8 @@ export interface ApiDeps {
 }
 
 const SESSION_TTL_SECONDS = 12 * 3600;
+const NOT_YOUR_LINK =
+  "這個連結是給在群組輸入 /settings 的那位管理員的。請用他的 LINE 登入，或自己在群組輸入 /settings。\nThis link belongs to the admin who sent /settings; sign in as them, or send /settings yourself.";
 
 class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -142,16 +144,28 @@ async function session(b: SessionBody, deps: ApiDeps, secret: string): Promise<R
 
   let groupId: string | undefined;
   if (b.link) {
-    const link = await verifyToken<{ g: string; u: string; n: string }>(secret, "link", b.link);
+    const link = await verifyToken<{ g: string; u: string; n: string; c?: string }>(secret, "link", b.link);
     if (!link) throw new HttpError(400, "連結已過期，請在群組重新輸入 /settings\nThe link has expired; send /settings again.");
-    if (!(await deps.admins.consumeNonce(link.n))) {
-      // A reload of the same page is fine once the account is already bound.
-      const bound = (await deps.admins.groupsForLogin(account.sub)).some((a) => a.groupId === link.g);
-      if (!bound) throw new HttpError(400, "連結已使用過，請重新輸入 /settings\nThis link was already used; send /settings again.");
-    } else {
+    const admin = await deps.admins.get(link.g, link.u);
+    if (!admin) throw new HttpError(403, "你已不是這個群組的管理員 You are no longer an admin of this group");
+
+    // The link is posted in the group, so anyone there can tap it. Only the admin it
+    // was issued to may bind: proved by the same user ID (chat and login in one
+    // provider), by an earlier bind, or by typing a code back in the group.
+    if (admin.loginSub) {
+      if (admin.loginSub !== account.sub) throw new HttpError(403, NOT_YOUR_LINK);
+      await deps.admins.consumeNonce(link.n); // a reload of an already-used link is fine
+    } else if (account.sub === link.u) {
+      if (!(await deps.admins.consumeNonce(link.n))) throw new HttpError(400, "連結已使用過，請重新輸入 /settings\nThis link was already used; send /settings again.");
       const res = await deps.admins.bindLogin(link.g, link.u, account.sub);
-      if (res === "missing") throw new HttpError(403, "你已不是這個群組的管理員 You are no longer an admin of this group");
-      if (res === "conflict") throw new HttpError(403, "這個管理員身分已綁定其他 LINE 帳號 This admin is linked to another LINE account");
+      if (res !== "ok") throw new HttpError(403, "這個管理員身分已綁定其他 LINE 帳號 This admin is linked to another LINE account");
+    } else if ((link.c ?? "default") === "default") {
+      // The default official account shares a provider with LINE Login, so the IDs would match.
+      throw new HttpError(403, NOT_YOUR_LINK);
+    } else {
+      // A white-label account in another provider: IDs differ, so the admin confirms in the group.
+      const code = await deps.admins.requestBind(link.g, link.u, account.sub, account.name ?? "", new Date(), LINK_TTL_SECONDS * 1000);
+      return json({ confirm: { code, groupId: link.g }, sub: account.sub, name: account.name }, 202);
     }
     groupId = link.g;
   }
