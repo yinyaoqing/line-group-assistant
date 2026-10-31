@@ -104,6 +104,9 @@ export const claude: Engine = async (text, target, env, opts, f) => {
     max_tokens: 4096,
     // A chat line is a light task: low effort keeps translations fast and cheap.
     output_config: { effort: "low" },
+    // Haiku may turn thinking off (at effort high or below); a chat line needs no reasoning, and this keeps
+    // the cost per message fixed. Opus 5.5 rejects disabled thinking, so it keeps the default.
+    ...(model.startsWith("claude-haiku") ? { thinking: { type: "disabled" as const } } : {}),
     ...fallback,
     system: claudeSystemPrompt(target, opts),
     messages: [{ role: "user", content: text }],

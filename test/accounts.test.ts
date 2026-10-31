@@ -315,3 +315,30 @@ describe("settings and admin API", () => {
     expect((await w.repo.get("Ca"))?.accountId).toBeFalsy();
   });
 });
+
+describe("Claude translation requests", () => {
+  const capture = () => {
+    const bodies: Record<string, any>[] = [];
+    const f = (async (_url: unknown, init?: { body?: unknown }) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      const message = { id: "msg_1", type: "message", role: "assistant", model: "m", content: [{ type: "text", text: "Hello" }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+      return new Response(JSON.stringify(message), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    return { bodies, f };
+  };
+  const env = { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", DB: {} as D1Database, ANTHROPIC_API_KEY: "a" };
+
+  it("Haiku runs with thinking off at low effort, so a message costs a fixed amount", async () => {
+    const { bodies, f } = capture();
+    expect(await engines.claude!("你好", "en", env, { model: "claude-haiku-5-5" }, f)).toBe("Hello");
+    expect(bodies[0]).toMatchObject({ model: "claude-haiku-5-5", thinking: { type: "disabled" }, output_config: { effort: "low" } });
+    expect(bodies[0]!.fallbacks).toBeUndefined();
+  });
+
+  it("Opus keeps its default thinking (it rejects disabled) and the refusal fallback", async () => {
+    const { bodies, f } = capture();
+    await engines.claude!("你好", "en", env, { model: "claude-opus-5-5" }, f);
+    expect(bodies[0]!.thinking).toBeUndefined();
+    expect(bodies[0]).toMatchObject({ fallbacks: "default" });
+  });
+});
