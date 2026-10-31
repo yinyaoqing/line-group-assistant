@@ -2,6 +2,7 @@ import type { Plugin } from "../core/types";
 import { translate } from "./translate";
 import { materials, tools } from "./counter";
 import { tasks } from "./tasks";
+import { cultureFestivals } from "./culture";
 
 /**
  * Every available plugin, by name. A group turns plugins on in the "groups" table (defaults: config/defaults.ts).
@@ -13,4 +14,5 @@ export const plugins: Record<string, Plugin> = {
   [tasks.name]: tasks,
   [tools.name]: tools,
   [materials.name]: materials,
+  [cultureFestivals.name]: cultureFestivals,
 };

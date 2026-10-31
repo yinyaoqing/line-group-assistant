@@ -228,7 +228,7 @@ describe("group registration and activation", () => {
     const { deps, replies, groups, codes } = setup();
     const code = await codes.create({ label: "test", channelId: "default", plan: "free" });
     await handleEvent(join("Cnew"), deps);
-    expect(await groups.get("Cnew")).toMatchObject({ status: "pending", name: "工班群組", plugins: ["translate", "tasks", "tools", "materials"] });
+    expect(await groups.get("Cnew")).toMatchObject({ status: "pending", name: "工班群組", plugins: ["translate", "tasks", "tools", "materials", "culture"] });
     expect(textOf(replies[0]?.[0])).toContain("/activate");
 
     await handleEvent(msg("/todo", "Cnew"), deps);

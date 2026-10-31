@@ -9,7 +9,7 @@ export const defaultGroup = (groupId: string, channelId = "default"): GroupConfi
   groupId,
   channelId,
   plan: "free",
-  plugins: ["translate", "tasks", "tools", "materials"],
+  plugins: ["translate", "tasks", "tools", "materials", "culture"],
   storage: { type: "d1" },
   settings: {
     translate: {
@@ -20,5 +20,6 @@ export const defaultGroup = (groupId: string, channelId = "default"): GroupConfi
       targetMode: "members", // only translate into languages members use; new members pick theirs
     },
     tasks: { digest: false }, // weekly push costs message quota, so off by default
+    culture: { leadDays: 2 }, // festival reminders ride on the next free reply, so on by default
   },
 });

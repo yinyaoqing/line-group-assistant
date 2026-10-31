@@ -8,10 +8,12 @@ type = "Text"
 globs = ["**/*.html"]
 fallthrough = true
 
-# 每週一 08:00（台北時間）= 週一 00:00 UTC，用來推播每週摘要。
-# Weekly digest: Monday 08:00 Taipei = Monday 00:00 UTC.
+# 每週一 08:00（台北時間）= 週一 00:00 UTC，用來推播每週摘要；
+# 每天 09:00（台北時間）= 01:00 UTC，節日提醒。對應 config/crons.ts。
+# Weekly digest: Monday 08:00 Taipei = Monday 00:00 UTC;
+# festival reminders: daily 09:00 Taipei = 01:00 UTC. Mirrored in config/crons.ts.
 [triggers]
-crons = ["0 0 * * 1"]
+crons = ["0 0 * * 1", "0 1 * * *"]
 
 # 金鑰請用 `wrangler secret put <NAME>` 設定，不要寫在這裡：
 # Set secrets with `wrangler secret put <NAME>`, never in this file:

@@ -1,3 +1,4 @@
+import { WEEKLY_CRON } from "../../../config/crons";
 import type { LineMessage, Plugin, QuickItem } from "../../core/types";
 import { action, tag, text, withQuickReply } from "../../core/types";
 import type { Row } from "../../storage/types";
@@ -163,8 +164,8 @@ export const tasks: Plugin = {
     }
   },
 
-  async onSchedule(_cron, ctx) {
-    if (ctx.settings.digest !== true || !ctx.plan.digest) return;
+  async onSchedule(cron, ctx) {
+    if (cron !== WEEKLY_CRON || ctx.settings.digest !== true || !ctx.plan.digest) return;
     const all = await ctx.storage.list(TABLE);
     const open = all.filter(isOpen);
     if (!open.length) return;

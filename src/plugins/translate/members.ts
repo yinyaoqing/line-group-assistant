@@ -1,4 +1,4 @@
-import { isLangCode, LANGUAGES, type LangCode } from "../../../config/languages";
+import { DEFAULT_LANGUAGES, isLangCode, LANGUAGES, type LangCode } from "../../../config/languages";
 import type { PluginContext, QuickItem } from "../../core/types";
 import type { Row } from "../../storage/types";
 
@@ -34,12 +34,29 @@ async function members(ctx: PluginContext): Promise<Row[]> {
  */
 export async function audience(ctx: PluginContext, now: number): Promise<LangCode[] | undefined> {
   if (ctx.settings.targetMode !== "members") return undefined;
+  const langs = await memberLanguages(ctx, now);
+  return langs.length ? langs : undefined;
+}
+
+/** Languages of members who declared one or were active in the last ACTIVE_DAYS. */
+async function memberLanguages(ctx: PluginContext, now: number): Promise<LangCode[]> {
   const since = now - ACTIVE_DAYS * 24 * 3600 * 1000;
   const langs = (await members(ctx))
     .filter((r) => r.declared === "1" || new Date(r.seenAt ?? 0).getTime() >= since)
     .map((r) => r.lang)
     .filter(isLangCode);
-  return langs.length ? [...new Set(langs)] : undefined;
+  return [...new Set(langs)];
+}
+
+/**
+ * The languages the group is known to use, for plugins other than translate:
+ * members' languages when any are known, else the group's translate languages.
+ */
+export async function knownLanguages(ctx: PluginContext, now: number): Promise<LangCode[]> {
+  const fromMembers = await memberLanguages(ctx, now);
+  if (fromMembers.length) return fromMembers;
+  const configured = (ctx.group.settings?.translate?.languages as unknown[] | undefined)?.filter(isLangCode) ?? [];
+  return configured.length ? configured : DEFAULT_LANGUAGES;
 }
 
 /**
