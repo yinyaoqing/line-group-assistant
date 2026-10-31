@@ -6,6 +6,10 @@ import { LineClient, verifySignature, type LineApi } from "./core/line";
 import type { Env, GroupConfig, LineEvent } from "./core/types";
 import { plugins } from "./plugins";
 import { handleReport } from "./report";
+import touchIcon from "./assets/apple-touch-icon.png";
+import favicon from "./assets/favicon-32.png";
+import logo from "./assets/logo-192.png";
+import { FAVICON_PATH, LOGO_PATH, TOUCH_ICON_PATH } from "./brand";
 import { privacyHtml, termsHtml } from "./legal";
 import { siteHtml } from "./site";
 import { D1AccountRepo } from "./storage/accounts";
@@ -103,6 +107,10 @@ export default {
     const path = url.pathname;
 
     if (req.method === "GET" && path === "/health") return new Response("ok");
+    const image = { [LOGO_PATH]: logo, [FAVICON_PATH]: favicon, "/favicon.ico": favicon, [TOUCH_ICON_PATH]: touchIcon }[path];
+    if (req.method === "GET" && image) {
+      return new Response(image, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" } });
+    }
     if (req.method === "GET" && path === "/") {
       return new Response(siteHtml(url.origin), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300" } });
     }

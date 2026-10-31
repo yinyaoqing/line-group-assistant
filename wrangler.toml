@@ -8,6 +8,12 @@ type = "Text"
 globs = ["**/*.html"]
 fallthrough = true
 
+# The logo and icons (src/assets) are bundled as binary and served by the Worker.
+[[rules]]
+type = "Data"
+globs = ["**/*.png"]
+fallthrough = true
+
 # 每週一 08:00（台北時間）= 週一 00:00 UTC，用來推播每週摘要；
 # 每天 09:00（台北時間）= 01:00 UTC，節日提醒。對應 config/crons.ts。
 # Weekly digest: Monday 08:00 Taipei = Monday 00:00 UTC;

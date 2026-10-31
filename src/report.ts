@@ -168,7 +168,7 @@ export function reportHtml(d: ReportData, token: string): string {
 
   return `<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="robots" content="noindex"><title>${name} 報表</title>
+<meta name="robots" content="noindex"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png"><title>${name} 報表</title>
 <style>
   :root { --bg:#f5f6f8; --card:#fff; --text:#1d2129; --muted:#6b7280; --line:#e5e7eb; --accent:#06c755; --warn:#b45309; --warn-bg:#fef3c7; color-scheme: light; }
   @media (prefers-color-scheme: dark) { :root { --bg:#111315; --card:#1b1e21; --text:#e8eaed; --muted:#9aa0a6; --line:#2c3034; --warn:#fbbf24; --warn-bg:#3a2e0b; color-scheme: dark; } }

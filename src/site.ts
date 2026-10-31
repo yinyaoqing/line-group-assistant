@@ -1,6 +1,7 @@
 import { LANGUAGES } from "../config/languages";
 import { PLANS, TOP_UP } from "../config/plans";
 import { addFriendUrl, SITE } from "../config/site";
+import { iconLinks, LOGO_PATH } from "./brand";
 
 /**
  * The public one-page product site, served at "/". Plans and languages come
@@ -27,6 +28,7 @@ export function siteHtml(origin: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+${iconLinks()}
 <title>${name}｜${esc(SITE.tagline)}：多語翻譯、任務、工具材料一次搞定</title>
 <meta name="description" content="把 ${name} 拉進 LINE 群組：訊息自動翻成中、英、越、印、泰、菲、日文，任務指派與完成回報、工具材料數量、一鍵匯出報表。免費開始。">
 <meta property="og:title" content="${name}｜${esc(SITE.tagline)}">
@@ -55,7 +57,7 @@ export function siteHtml(origin: string): string {
   header { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
   header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 12px; height: 60px; }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; text-decoration: none; font-size: 18px; }
-  .brand i { width: 30px; height: 30px; border-radius: 9px; background: var(--green); display: grid; place-items: center; color: #fff; font-style: normal; font-size: 16px; }
+  .brand img { width: 30px; height: 30px; border-radius: 9px; object-fit: cover; display: block; }
   .brand small { font-weight: 500; color: var(--muted); font-size: 13px; }
   nav { display: flex; gap: 20px; font-size: 15px; }
   nav a { text-decoration: none; color: var(--muted); }
@@ -143,7 +145,7 @@ export function siteHtml(origin: string): string {
 <body>
 <header>
   <div class="wrap">
-    <a class="brand" href="#top"><i>${esc(SITE.mark)}</i>${name} <small>${esc(SITE.tagline)}</small></a>
+    <a class="brand" href="#top"><img src="${LOGO_PATH}" alt="" width="30" height="30">${name} <small>${esc(SITE.tagline)}</small></a>
     <nav><a href="#features">功能</a><a href="#how">開始使用</a><a href="#pricing">方案</a><a href="#faq">常見問題</a></nav>
     <a class="btn small" href="${join}">加入 LINE 洽詢</a>
   </div>

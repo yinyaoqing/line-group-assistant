@@ -1,5 +1,6 @@
 import { PLANS, TOP_UP } from "../config/plans";
 import { addFriendUrl, SITE } from "../config/site";
+import { iconLinks, LOGO_PATH } from "./brand";
 
 /**
  * Privacy policy (/privacy) and terms of service (/terms). Written from what
@@ -19,6 +20,7 @@ function page(title: string, body: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+${iconLinks()}
 <title>${esc(title)}｜${name}</title>
 <meta name="robots" content="noindex">
 <style>
@@ -28,7 +30,7 @@ function page(title: string, body: string): string {
   .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
   a { color: inherit; }
   .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 800; text-decoration: none; font-size: 18px; margin-bottom: 28px; }
-  .brand i { width: 30px; height: 30px; border-radius: 9px; background: var(--green); display: grid; place-items: center; color: #fff; font-style: normal; font-size: 16px; }
+  .brand img { width: 30px; height: 30px; border-radius: 9px; object-fit: cover; display: block; }
   h1 { font-size: 30px; margin: 0 0 4px; letter-spacing: -0.3px; }
   .meta { color: var(--muted); margin: 0 0 28px; font-size: 14px; }
   h2 { font-size: 20px; margin: 32px 0 8px; }
@@ -44,7 +46,7 @@ function page(title: string, body: string): string {
 </head>
 <body>
 <div class="wrap">
-  <a class="brand" href="/"><i>${esc(SITE.mark)}</i>${name}</a>
+  <a class="brand" href="/"><img src="${LOGO_PATH}" alt="" width="30" height="30">${name}</a>
   ${body}
   <footer><a href="/">首頁</a><a href="/privacy">隱私權政策</a><a href="/terms">服務條款</a><span>最後更新 ${LEGAL_UPDATED}</span></footer>
 </div>
