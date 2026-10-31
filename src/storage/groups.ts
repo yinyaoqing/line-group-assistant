@@ -1,7 +1,7 @@
 import type { GroupConfig } from "../core/types";
 
 /** Fields of a group that the settings and admin pages may change. */
-export type GroupPatch = Partial<Pick<GroupConfig, "name" | "status" | "plugins" | "settings" | "storage" | "plan" | "planUntil">>;
+export type GroupPatch = Partial<Pick<GroupConfig, "name" | "status" | "plugins" | "settings" | "storage" | "plan" | "planUntil" | "accountId">>;
 
 /** Where group configurations live; replaces the old hard-coded config/groups.ts. */
 export interface GroupRepo {
@@ -38,6 +38,7 @@ interface GroupRecord {
   channel_id: string;
   plan: string;
   plan_until: string | null;
+  account_id?: string | null;
 }
 
 const STATUSES = ["pending", "active", "left"] as const;
@@ -49,6 +50,7 @@ const fromRecord = (r: GroupRecord): GroupConfig => ({
   channelId: r.channel_id,
   plan: r.plan,
   planUntil: r.plan_until ?? undefined,
+  accountId: r.account_id ?? undefined,
   plugins: JSON.parse(r.plugins) as string[],
   settings: JSON.parse(r.settings) as GroupConfig["settings"],
   storage: JSON.parse(r.storage) as GroupConfig["storage"],
@@ -63,6 +65,7 @@ const COLUMNS: Record<keyof GroupPatch, [string, boolean]> = {
   storage: ["storage", true],
   plan: ["plan", false],
   planUntil: ["plan_until", false],
+  accountId: ["account_id", false],
 };
 
 export class D1GroupRepo implements GroupRepo {

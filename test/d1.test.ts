@@ -1,6 +1,7 @@
 import { getPlatformProxy, type PlatformProxy } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { defaultGroup } from "../config/defaults";
+import { D1AccountRepo } from "../src/storage/accounts";
 import { D1AdminRepo } from "../src/storage/admins";
 import { D1ChannelRepo } from "../src/storage/channels";
 import { D1CodeRepo, formatCode } from "../src/storage/codes";
@@ -12,6 +13,7 @@ import v2 from "../migrations/0002_admins_channels_plans.sql?raw";
 import v3 from "../migrations/0003_split_items.sql?raw";
 import v4 from "../migrations/0004_activation_codes.sql?raw";
 import v5 from "../migrations/0005_outbox.sql?raw";
+import v6 from "../migrations/0006_accounts.sql?raw";
 
 // Runs the real SQL against a local, in-memory D1 (workerd via wrangler).
 let proxy: PlatformProxy<{ DB: D1Database }>;
@@ -20,7 +22,7 @@ let db: D1Database;
 beforeAll(async () => {
   proxy = await getPlatformProxy<{ DB: D1Database }>({ persist: false });
   db = proxy.env.DB;
-  const sql = [init, v2, v3, v4, v5].join(";\n").replace(/--.*$/gm, "");
+  const sql = [init, v2, v3, v4, v5, v6].join(";\n").replace(/--.*$/gm, "");
   const statements = sql.split(";").map((s: string) => s.trim()).filter(Boolean);
   await db.batch(statements.map((s: string) => db.prepare(s)));
 }, 60_000);
@@ -156,5 +158,30 @@ describe("D1OutboxRepo", () => {
     expect(await repo.take("Co", 5)).toEqual([]);
     expect(await repo.take("Cother", 0)).toEqual([]);
     expect((await repo.take("Cother", 5)).length).toBe(1);
+  });
+});
+
+describe("D1AccountRepo", () => {
+  it("grants, renews, tops up (never below zero) and binds groups", async () => {
+    const repo = new D1AccountRepo(db);
+    const a = await repo.grant("default", "U1", "duo", "2099-12-31");
+    expect(a).toMatchObject({ accountId: "default:U1", plan: "duo", planUntil: "2099-12-31", bonusChars: 0 });
+    expect((await repo.grant("default", "U1", "duo", "2100-01-31")).planUntil).toBe("2100-01-31");
+    expect((await repo.addBonus("default:U1", 100_000))?.bonusChars).toBe(100_000);
+    expect((await repo.addBonus("default:U1", -200_000))?.bonusChars).toBe(0);
+    expect((await repo.list()).map((x) => x.accountId)).toEqual(["default:U1"]);
+
+    const groups = new D1GroupRepo(db);
+    await groups.register(defaultGroup("Cacct", "default"));
+    await groups.update("Cacct", { accountId: "default:U1" });
+    expect((await groups.get("Cacct"))?.accountId).toBe("default:U1");
+  });
+
+  it("keeps top-up codes apart from activation codes", async () => {
+    const codes = new D1CodeRepo(db);
+    const top = await codes.create({ label: "加購", channelId: "default", plan: "duo", kind: "topup", chars: 100_000 });
+    expect(await codes.redeem(top.code, "default", "Cg", "U1")).toBeUndefined(); // not an activation code
+    expect(await codes.redeem(top.code, "default", "Cg", "U1", new Date(), "topup")).toMatchObject({ kind: "topup", chars: 100_000 });
+    expect(await codes.redeem(top.code, "default", "Cg", "U1", new Date(), "topup")).toBeUndefined();
   });
 });

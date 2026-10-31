@@ -1,5 +1,5 @@
 import { LANGUAGES } from "../config/languages";
-import { PLANS } from "../config/plans";
+import { PLANS, TOP_UP } from "../config/plans";
 import { addFriendUrl, SITE } from "../config/site";
 
 /**
@@ -16,6 +16,7 @@ const asMessages = (chars: number) => `約 ${fmt(Math.round(chars / 25 / 100) * 
 export function siteHtml(origin: string): string {
   const free = PLANS.free;
   const pro = PLANS.pro;
+  const duo = PLANS.duo;
   const join = addFriendUrl(SITE.lineId);
   const name = esc(SITE.name);
   const langList = (codes: string[]) => codes.map((c) => LANGUAGES[c as keyof typeof LANGUAGES]).map((l) => `${l.flag} ${esc(l.name)}`).join("　");
@@ -108,7 +109,8 @@ export function siteHtml(origin: string): string {
   .step h3 { margin: 0 0 4px; font-size: 17px; }
   .step p { margin: 0; color: var(--muted); font-size: 15px; }
 
-  .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; align-items: stretch; }
+  .plans { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; align-items: stretch; }
+  @media (max-width: 1080px) { .plans { grid-template-columns: repeat(2, 1fr); } }
   @media (max-width: 860px) { .plans { grid-template-columns: 1fr; max-width: 460px; margin-inline: auto; } }
   .plan { display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 20px; padding: 26px; }
   .plan.featured { border: 2px solid var(--green); position: relative; box-shadow: 0 16px 40px rgba(6,199,85,.15); }
@@ -203,7 +205,7 @@ export function siteHtml(origin: string): string {
   <section class="alt" id="pricing">
     <div class="wrap">
       <h2>訂閱方案</h2>
-      <p class="sub">以群組計價，先免費試用，需要更多語言再升級。</p>
+      <p class="sub">工作群組以群組計價；跟另一半、家人聊天選雙人版，以人計價、群組不限。</p>
       <div class="plans">
         <div class="plan">
           <h3>免費</h3>
@@ -234,6 +236,20 @@ export function siteHtml(origin: string): string {
             ${check("專有名詞詞彙表（Claude 引擎）")}
           </ul>
           <a class="btn" href="${join}">升級專業版</a>
+        </div>
+        <div class="plan">
+          <h3>雙人版</h3>
+          <div class="price">NT${fmt(duo.price)} <small>／人／月</small></div>
+          <p class="for">跨國情侶、家人、朋友聊天</p>
+          <ul>
+            ${check("綁定你一個人，拉進幾個群組都可以")}
+            ${check(`每月翻譯 ${fmt(duo.monthlyChars)} 字（所有群組合計）`)}
+            ${check(`全部 ${duo.languages.length} 種語言`)}
+            ${check("AI 翻譯，可選語氣：自然、禮貌、輕鬆、親暱")}
+            ${check("填一句對話說明，例如「對方是長輩」，翻得更貼切")}
+            ${check(`用完可加購：${fmt(TOP_UP.chars)} 字 NT${TOP_UP.price}`)}
+          </ul>
+          <a class="btn ghost" href="${join}">開通雙人版</a>
         </div>
         <div class="plan">
           <h3>企業白牌</h3>

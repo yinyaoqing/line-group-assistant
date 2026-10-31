@@ -48,6 +48,7 @@ const translateCtx = (ctx: PluginContext) => ({
   plan: ctx.plan,
   env: ctx.env,
   usage: ctx.usage,
+  bonus: ctx.bonus,
 });
 
 /** Languages the group wants that this row's i18n still lacks (none if translation is off). */

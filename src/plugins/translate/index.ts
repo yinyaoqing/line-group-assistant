@@ -1,5 +1,5 @@
 import { DEFAULT_LANGUAGES, isLangCode, LANGUAGES, type LangCode } from "../../../config/languages";
-import type { Plan } from "../../../config/plans";
+import { engineWeight, type Plan } from "../../../config/plans";
 import type { Plugin, PluginContext } from "../../core/types";
 import { text, withQuickReply } from "../../core/types";
 import { detectScript } from "./detect";
@@ -161,6 +161,8 @@ export interface TranslateCtx {
   plan: Plan;
   env: PluginContext["env"];
   usage: PluginContext["usage"];
+  /** Top-up characters of a per-user account, spent after the monthly allowance. */
+  bonus?: PluginContext["bonus"];
   /** Only translate into these languages (the members' languages); undefined = all of the group's. */
   audience?: LangCode[];
 }
@@ -183,10 +185,18 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
 
   const engine = engines[String(s.engine ?? "google")];
   if (!engine) throw new Error(`unknown translate engine: ${String(s.engine)}`);
-  const opts: TranslateOptions = { glossary: s.glossary as string | undefined, model: s.model as string | undefined };
+  const opts: TranslateOptions = {
+    glossary: s.glossary as string | undefined,
+    model: s.model as string | undefined,
+    tone: s.tone as string | undefined,
+    toneNote: s.toneNote as string | undefined,
+  };
 
-  const limit = monthlyLimit(s, t.plan);
-  if (limit > 0 && (await t.usage.get(USAGE_METRIC)) >= limit) throw new QuotaExceeded();
+  // Accounts (per-user plans) share one allowance across their groups, so a group's
+  // own override does not apply; past the allowance, top-up characters are spent.
+  const limit = t.bonus ? t.plan.monthlyChars : monthlyLimit(s, t.plan);
+  const usedBefore = await t.usage.get(USAGE_METRIC);
+  if (limit > 0 && usedBefore >= limit && !(t.bonus && (await t.bonus.get()) > 0)) throw new QuotaExceeded();
 
   let calls = 0; // every engine call is billed for the full text
   const call = async (target: LangCode) => {
@@ -204,7 +214,13 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
     if (baseLang(first.target) !== detected) results.push(first);
   }
   results.push(...(await Promise.all(targets.map(call))));
-  await t.usage.add(USAGE_METRIC, source.length * calls);
+  // Costlier engines count for more allowance characters (config/plans.ts ENGINE_WEIGHT).
+  const charged = Math.ceil(source.length * calls * engineWeight(s));
+  await t.usage.add(USAGE_METRIC, charged);
+  if (t.bonus && limit > 0) {
+    const overflow = Math.max(0, usedBefore + charged - limit) - Math.max(0, usedBefore - limit);
+    if (overflow > 0) await t.bonus.consume(overflow);
+  }
 
   return { from, outs: results.filter((r) => r.text && r.text.trim() !== source.trim()).map(({ target, text }) => ({ target, text })) };
 }

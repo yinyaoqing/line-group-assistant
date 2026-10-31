@@ -1,5 +1,8 @@
 import { isLangCode, LANGUAGES } from "../config/languages";
-import { effectivePlan, PLANS, UPGRADE_NOTE, type PlanId } from "../config/plans";
+import { effectivePlan, ENGINE_CHOICES, PLANS, TOP_UP, UPGRADE_NOTE, type PlanId } from "../config/plans";
+import { groupPlan } from "./core/dispatcher";
+import { isTone, TONES } from "./plugins/translate/engines";
+import { accountUsageKey, type Account, type AccountRepo } from "./storage/accounts";
 import { encrypt, verifyToken, signToken } from "./core/crypto";
 import type { LineApi } from "./core/line";
 import type { Env, GroupConfig, Plugin } from "./core/types";
@@ -25,6 +28,8 @@ import { buildReport, reportUrl, summaryText } from "./report";
  *   DELETE /api/admin/channels/:id
  *   GET|POST /api/admin/codes          platform admins: one-time activation codes
  *   DELETE /api/admin/codes/:code      revoke an unused code
+ *   GET  /api/admin/accounts            platform admins: per-user accounts (Duo)
+ *   PUT  /api/admin/accounts/:id        add top-up characters, change plan or end date
  */
 export interface ApiDeps {
   env: Env;
@@ -32,6 +37,8 @@ export interface ApiDeps {
   admins: AdminRepo;
   channels: ChannelRepo;
   codes: CodeRepo;
+  /** Per-user subscriptions (Duo). */
+  accounts?: AccountRepo;
   usage: UsageMeter;
   plugins: Record<string, Plugin>;
   lineFor(channelId: string): Promise<LineApi | undefined>;
@@ -82,10 +89,15 @@ async function route(req: Request, deps: ApiDeps): Promise<Response> {
     const groups = await Promise.all(
       mine.map(async (a) => {
         const g = await deps.groups.get(a.groupId);
-        return g && { groupId: g.groupId, name: g.name, status: g.status, plan: effectivePlan(g.plan, g.planUntil).id, role: a.role };
+        if (g?.accountId && deps.accounts) g.account = await deps.accounts.get(g.accountId);
+        return g && { groupId: g.groupId, name: g.name, status: g.status, plan: groupPlan(g).id, role: a.role };
       }),
     );
-    return json({ sub: me.sub, name: me.name, platformAdmin, groups: groups.filter(Boolean) });
+    // Accounts belong to a LINE user ID; the person owns those matching an admin row they signed in through.
+    const ownIds = new Set(mine.map((a) => a.lineUserId));
+    const accounts = deps.accounts ? (await deps.accounts.list()).filter((a) => ownIds.has(a.userId)) : [];
+    const accountViews = await Promise.all(accounts.map((a) => accountView(a, deps)));
+    return json({ sub: me.sub, name: me.name, platformAdmin, groups: groups.filter(Boolean), accounts: accountViews });
   }
 
   let g = m(/^\/api\/groups\/([^/]+)$/);
@@ -156,11 +168,27 @@ async function allowedGroup(groupId: string, sub: string, platformAdmin: boolean
   if (!platformAdmin && !(await deps.admins.groupsForLogin(sub)).some((a) => a.groupId === groupId)) {
     throw new HttpError(403, "你不是這個群組的管理員 Not an admin of this group");
   }
+  if (group.accountId && deps.accounts) group.account = await deps.accounts.get(group.accountId);
   return group;
 }
 
+/** An account's plan, this month's use across its groups, and top-ups left. */
+async function accountView(a: Account, deps: ApiDeps) {
+  const plan = effectivePlan(a.plan, a.planUntil);
+  return {
+    accountId: a.accountId,
+    plan: plan.name,
+    planId: a.plan,
+    planUntil: a.planUntil,
+    used: await deps.usage.get(accountUsageKey(a.accountId), USAGE_METRIC),
+    limit: plan.monthlyChars,
+    bonusChars: a.bonusChars,
+    topUp: TOP_UP,
+  };
+}
+
 async function groupView(group: GroupConfig, deps: ApiDeps) {
-  const plan = effectivePlan(group.plan, group.planUntil);
+  const plan = groupPlan(group);
   const t = group.settings?.translate ?? {};
   const line = await deps.lineFor(group.channelId ?? "default").catch(() => undefined);
   const admins = await Promise.all(
@@ -175,7 +203,8 @@ async function groupView(group: GroupConfig, deps: ApiDeps) {
     name: group.name,
     status: group.status,
     channelId: group.channelId,
-    plan: { ...plan, until: plan.id === "free" ? undefined : group.planUntil },
+    plan: { ...plan, until: plan.id === "free" ? undefined : (group.account?.planUntil ?? group.planUntil) },
+    account: group.account ? await accountView(group.account, deps) : null,
     planId: group.plan ?? "free",
     plans: Object.values(PLANS),
     upgradeNote: UPGRADE_NOTE,
@@ -189,11 +218,19 @@ async function groupView(group: GroupConfig, deps: ApiDeps) {
       minLength: Number(t.minLength ?? 2),
       glossary: typeof t.glossary === "string" ? t.glossary : "",
       engine: t.engine ?? "google",
+      // The engine as one choice id: "google", or the Claude model.
+      engineChoice: (t.engine ?? "google") === "claude" ? String(t.model ?? "claude-haiku-5-5") : String(t.engine ?? "google"),
+      tone: isTone(t.tone) ? t.tone : "natural",
+      toneNote: typeof t.toneNote === "string" ? t.toneNote : "",
       monthlyChars: typeof t.monthlyChars === "number" ? t.monthlyChars : null,
     },
     tasks: { digest: group.settings?.tasks?.digest === true },
     notify: group.settings?.core?.notify === "push" ? "push" : "reply",
-    usage: { translateChars: await deps.usage.get(group.groupId, USAGE_METRIC), limit: monthlyLimit(t, plan) },
+    usage: group.account
+      ? { translateChars: await deps.usage.get(accountUsageKey(group.account.accountId), USAGE_METRIC), limit: plan.monthlyChars }
+      : { translateChars: await deps.usage.get(group.groupId, USAGE_METRIC), limit: monthlyLimit(t, plan) },
+    engines: plan.engineChoice ? ENGINE_CHOICES.map((e) => ({ id: e.id, label: e.label })) : [],
+    tones: Object.entries(TONES).map(([id, v]) => ({ id, label: v.label })),
     languages: Object.entries(LANGUAGES).map(([code, l]) => ({ code, name: l.name, flag: l.flag, allowed: plan.languages.includes(code as never) })),
     admins,
   };
@@ -201,7 +238,17 @@ async function groupView(group: GroupConfig, deps: ApiDeps) {
 
 interface SettingsBody {
   plugins?: unknown;
-  translate?: { languages?: unknown; trigger?: unknown; targetMode?: unknown; showName?: unknown; minLength?: unknown; glossary?: unknown };
+  translate?: {
+    languages?: unknown;
+    trigger?: unknown;
+    targetMode?: unknown;
+    showName?: unknown;
+    minLength?: unknown;
+    glossary?: unknown;
+    engineChoice?: unknown;
+    tone?: unknown;
+    toneNote?: unknown;
+  };
   tasks?: { digest?: unknown };
   /** How scheduled messages reach the group: "reply" (free, with the next event) or "push" (at once, uses quota). */
   notify?: unknown;
@@ -209,7 +256,7 @@ interface SettingsBody {
 
 /** What group admins may change. Engine and quota stay with platform admins. */
 export function applySettings(group: GroupConfig, b: SettingsBody, plugins: Record<string, Plugin>) {
-  const plan = effectivePlan(group.plan, group.planUntil);
+  const plan = groupPlan(group);
   const settings = structuredClone(group.settings ?? {});
   const t = (settings.translate ??= {});
   const patch: { plugins?: string[]; settings: NonNullable<GroupConfig["settings"]> } = { settings };
@@ -236,6 +283,22 @@ export function applySettings(group: GroupConfig, b: SettingsBody, plugins: Reco
     t.targetMode = bt.targetMode;
   }
   if (bt?.showName !== undefined) t.showName = bt.showName === true;
+  if (bt?.engineChoice !== undefined) {
+    const choice = ENGINE_CHOICES.find((e) => e.id === bt.engineChoice);
+    if (!choice) throw new HttpError(400, "未知的翻譯引擎 Unknown engine");
+    if (!plan.engineChoice) throw new HttpError(403, "選擇翻譯引擎需要專業版或雙人版 Engine choice needs Pro or Duo");
+    t.engine = choice.engine;
+    if (choice.model) t.model = choice.model;
+    else delete t.model;
+  }
+  if (bt?.tone !== undefined) {
+    if (!isTone(bt.tone)) throw new HttpError(400, "未知的語氣 Unknown tone");
+    t.tone = bt.tone;
+  }
+  if (bt?.toneNote !== undefined) {
+    if (typeof bt.toneNote !== "string" || bt.toneNote.length > 200) throw new HttpError(400, "對話說明最多 200 字");
+    t.toneNote = bt.toneNote.trim();
+  }
   if (bt?.minLength !== undefined) {
     const n = Number(bt.minLength);
     if (!Number.isInteger(n) || n < 1 || n > 50) throw new HttpError(400, "最短長度需為 1–50");
@@ -354,6 +417,33 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
     return json({ ok: true });
   }
 
+  if (req.method === "GET" && path === "/api/admin/accounts") {
+    const accounts = deps.accounts ? await deps.accounts.list() : [];
+    return json(await Promise.all(accounts.map((a) => accountView(a, deps))));
+  }
+
+  m = path.match(/^\/api\/admin\/accounts\/([^/]+)$/);
+  if (m && req.method === "PUT") {
+    if (!deps.accounts) throw new HttpError(503, "帳號功能未開通");
+    const id = decodeURIComponent(m[1]!);
+    if (!(await deps.accounts.get(id))) throw new HttpError(404, "找不到帳號 Account not found");
+    const b = await body<{ bonusAdd?: unknown; plan?: unknown; planUntil?: unknown }>();
+    if (b.bonusAdd !== undefined && b.bonusAdd !== "") {
+      const n = Number(b.bonusAdd);
+      if (!Number.isInteger(n) || Math.abs(n) > 10_000_000) throw new HttpError(400, "加值字數需為整數（可為負數扣回）");
+      await deps.accounts.addBonus(id, n);
+    }
+    if (b.plan !== undefined) {
+      if (!(typeof b.plan === "string" && b.plan in PLANS)) throw new HttpError(400, "未知的方案 Unknown plan");
+      await deps.accounts.update(id, { plan: b.plan });
+    }
+    if (b.planUntil !== undefined) {
+      if (b.planUntil !== "" && !(typeof b.planUntil === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.planUntil))) throw new HttpError(400, "日期格式 YYYY-MM-DD");
+      await deps.accounts.update(id, { planUntil: b.planUntil as string });
+    }
+    return json(await accountView((await deps.accounts.get(id))!, deps));
+  }
+
   if (req.method === "GET" && path === "/api/admin/codes") {
     const [codes, groups] = await Promise.all([deps.codes.list(), deps.groups.listAll()]);
     const names = new Map(groups.map((g) => [g.groupId, g.name]));
@@ -361,6 +451,8 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
     return json(
       codes.map((c) => ({
         code: formatCode(c.code),
+        kind: c.kind ?? "activate",
+        chars: c.chars ?? 0,
         label: c.label,
         channelId: c.channelId,
         plan: c.plan,
@@ -375,7 +467,10 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
   }
 
   if (req.method === "POST" && path === "/api/admin/codes") {
-    const b = await body<{ label?: unknown; channelId?: unknown; plan?: unknown; planUntil?: unknown; validDays?: unknown; count?: unknown }>();
+    const b = await body<{ label?: unknown; channelId?: unknown; plan?: unknown; planUntil?: unknown; validDays?: unknown; count?: unknown; kind?: unknown; chars?: unknown }>();
+    const kind = b.kind === "topup" ? "topup" : "activate";
+    const chars = kind === "topup" ? (b.chars === undefined || b.chars === "" ? TOP_UP.chars : Number(b.chars)) : 0;
+    if (kind === "topup" && (!Number.isInteger(chars) || chars < 1 || chars > 10_000_000)) throw new HttpError(400, "加購字數需為 1 到 10,000,000 的整數");
     const channelId = typeof b.channelId === "string" && b.channelId ? b.channelId : "default";
     if (channelId !== "default" && !(await deps.channels.get(channelId))) throw new HttpError(400, "找不到這個頻道 Unknown channel");
     const plan = typeof b.plan === "string" && b.plan in PLANS ? b.plan : "free";
@@ -389,9 +484,9 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
     const label = typeof b.label === "string" ? b.label.trim().slice(0, 100) : "";
     const created = [];
     for (let i = 0; i < count; i++) {
-      created.push(await deps.codes.create({ label, channelId, plan, planUntil, expiresAt, createdBy: (await verifyMe(req, secret))?.sub }));
+      created.push(await deps.codes.create({ label, channelId, plan, planUntil, expiresAt, createdBy: (await verifyMe(req, secret))?.sub, kind, chars }));
     }
-    return json(created.map((c) => ({ code: formatCode(c.code), expiresAt: c.expiresAt, plan: c.plan, planUntil: c.planUntil })));
+    return json(created.map((c) => ({ code: formatCode(c.code), expiresAt: c.expiresAt, plan: c.plan, planUntil: c.planUntil, kind: c.kind, chars: c.chars })));
   }
 
   m = path.match(/^\/api\/admin\/codes\/([^/]+)$/);

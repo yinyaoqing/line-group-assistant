@@ -7,6 +7,7 @@ import type { Env, GroupConfig, LineEvent } from "./core/types";
 import { plugins } from "./plugins";
 import { handleReport } from "./report";
 import { siteHtml } from "./site";
+import { D1AccountRepo } from "./storage/accounts";
 import { D1AdminRepo } from "./storage/admins";
 import { D1ChannelRepo } from "./storage/channels";
 import { D1CodeRepo } from "./storage/codes";
@@ -88,6 +89,7 @@ async function webhook(req: Request, env: Env, ctx: ExecutionContext, channelId:
     storageFor: storageFor(env),
     origin,
     outbox: new D1OutboxRepo(env.DB),
+    accounts: new D1AccountRepo(env.DB),
   };
   // Answer LINE at once; do the work (translation, storage) in the background.
   ctx.waitUntil(Promise.all(events.map((e) => handleEvent(e, deps).catch((err) => console.error(err)))));
@@ -116,6 +118,7 @@ export default {
         admins: new D1AdminRepo(env.DB),
         channels: new D1ChannelRepo(env.DB),
         codes: new D1CodeRepo(env.DB),
+        accounts: new D1AccountRepo(env.DB),
         usage: new D1UsageMeter(env.DB),
         plugins,
         lineFor: lineFor(env),
@@ -140,7 +143,7 @@ export default {
   },
 
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    const deps = { env, groups: new D1GroupRepo(env.DB), usage: new D1UsageMeter(env.DB), plugins, storageFor: storageFor(env), outbox: new D1OutboxRepo(env.DB) };
+    const deps = { env, groups: new D1GroupRepo(env.DB), usage: new D1UsageMeter(env.DB), plugins, storageFor: storageFor(env), outbox: new D1OutboxRepo(env.DB), accounts: new D1AccountRepo(env.DB) };
     ctx.waitUntil(handleSchedule(event.cron, deps, lineFor(env)));
   },
 } satisfies ExportedHandler<Env>;

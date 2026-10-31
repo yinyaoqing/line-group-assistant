@@ -165,6 +165,7 @@ async function home() {
     h("button", { class: "on" }, "我的群組"),
     h("button", { onclick: () => adminGroups().catch(fail) }, "所有群組"),
     h("button", { onclick: () => adminCodes().catch(fail) }, "啟用碼"),
+    h("button", { onclick: () => adminAccounts().catch(fail) }, "雙人版帳號"),
     h("button", { onclick: () => adminChannels().catch(fail) }, "白牌頻道")) : null;
   const list = me.groups.length
     ? h("div", { class: "list" }, me.groups.map((g) => h("button", { class: "item", onclick: () => groupPage(g.groupId).catch(fail) },
@@ -175,6 +176,7 @@ async function home() {
     h("h1", {}, "群組助理"),
     h("p", { class: "sub" }, me.name || "", " · 帳號 ID ", h("code", {}, me.sub)),
     tabs,
+    (me.accounts || []).map((a) => accountCard(a, "我的" + a.plan + "帳號 My account")),
     h("div", { class: "card" }, h("h2", {}, "我管理的群組 My groups"), list),
   );
 }
@@ -184,7 +186,7 @@ async function groupPage(groupId) {
   const g = await api("/api/groups/" + encodeURIComponent(groupId));
   const draft = {
     plugins: [...g.plugins],
-    translate: { languages: [...g.translate.languages], trigger: g.translate.trigger, targetMode: g.translate.targetMode, showName: g.translate.showName, minLength: g.translate.minLength, glossary: g.translate.glossary },
+    translate: { languages: [...g.translate.languages], trigger: g.translate.trigger, targetMode: g.translate.targetMode, showName: g.translate.showName, minLength: g.translate.minLength, glossary: g.translate.glossary, engineChoice: g.translate.engineChoice, tone: g.translate.tone, toneNote: g.translate.toneNote },
     tasks: { digest: g.tasks.digest },
     notify: g.notify,
   };
@@ -224,6 +226,13 @@ async function groupPage(groupId) {
     el.addEventListener("click", () => { draft.notify = v; notifySeg.querySelectorAll("label").forEach((x) => x.classList.toggle("on", x === el)); });
     return el;
   }));
+  const engineSelect = h("select", {}, g.engines.map((e) => h("option", { value: e.id, selected: e.id === draft.translate.engineChoice }, e.label)));
+  engineSelect.addEventListener("change", () => { draft.translate.engineChoice = engineSelect.value; });
+  const toneSelect = h("select", {}, g.tones.map((t) => h("option", { value: t.id, selected: t.id === draft.translate.tone }, t.label)));
+  toneSelect.addEventListener("change", () => { draft.translate.tone = toneSelect.value; });
+  const toneNote = h("textarea", { maxlength: 200, placeholder: "例：對方是我女朋友的媽媽，要很有禮貌" });
+  toneNote.value = draft.translate.toneNote || "";
+  toneNote.addEventListener("input", () => { draft.translate.toneNote = toneNote.value; });
   const minLen = h("input", { type: "number", min: 1, max: 50, value: draft.translate.minLength, style: "width:80px" });
   minLen.addEventListener("input", () => { draft.translate.minLength = Number(minLen.value); });
 
@@ -233,9 +242,10 @@ async function groupPage(groupId) {
     h("p", { class: "sub" }, h("span", { class: isPro ? "badge pro" : "badge" }, g.plan.name), g.plan.until ? " · 到期 " + g.plan.until : "", g.status !== "active" ? " · 未啟用" : ""),
 
     h("div", { class: "card" },
-      h("h2", {}, "本月翻譯用量 Usage this month"),
+      h("h2", {}, g.account ? "本月翻譯用量（帳號內所有群組合計）" : "本月翻譯用量 Usage this month"),
       h("div", { class: "bar" }, h("i", { class: pct >= 90 ? "hot" : "", style: "width:" + pct + "%" })),
-      h("div", { class: "muted" }, fmt(g.usage.translateChars), " / ", g.usage.limit ? fmt(g.usage.limit) + " 字元" : "不限", g.usage.limit ? "（" + pct + "%）" : "")),
+      h("div", { class: "muted" }, fmt(g.usage.translateChars), " / ", g.usage.limit ? fmt(g.usage.limit) + " 字元" : "不限", g.usage.limit ? "（" + pct + "%）" : ""),
+      g.account ? h("p", { class: "muted" }, "加購剩餘 Top-up left：" + fmt(g.account.bonusChars) + " 字　｜　加購：在群組輸入 /topup 加購碼（" + fmt(g.account.topUp.chars) + " 字 NT$" + g.account.topUp.price + "）") : null),
 
     h("div", { class: "card" },
       h("h2", {}, "功能 Features"),
@@ -252,6 +262,13 @@ async function groupPage(groupId) {
       h("div", { class: "row" }, h("div", {}, "只翻成成員用的語言", h("small", {}, "依每個人平常講的語言（或 /lang 設定）決定要翻成哪些，減少洗版和翻譯量；新成員加入時會請他選語言")), switchEl(draft.translate.targetMode === "members", false, (on) => { draft.translate.targetMode = on ? "members" : "all"; })),
       h("div", { class: "row" }, h("div", {}, "顯示發言者名字", h("small", {}, "譯文前面加上名字")), switchEl(draft.translate.showName, false, (on) => { draft.translate.showName = on; })),
       h("div", { class: "row" }, h("div", {}, "最短翻譯長度", h("small", {}, "少於這個字數的訊息不翻（例如「OK」）")), minLen)),
+
+    g.engines.length ? h("div", { class: "card" },
+      h("h2", {}, "翻譯引擎與語氣 Engine & tone"),
+      h("label", { class: "field", style: "margin-bottom:12px" }, "翻譯引擎", engineSelect),
+      h("label", { class: "field", style: "margin-bottom:12px" }, "語氣（Claude 引擎才有效）", toneSelect),
+      h("label", { class: "field" }, "這段對話的說明（選填，最多 200 字，Claude 引擎才有效）", toneNote),
+      h("p", { class: "muted" }, "例：「對方是我女朋友的媽媽，要很有禮貌」「我們是工地同事，講話直接就好」")) : null,
 
     h("div", { class: "card" },
       h("h2", {}, "專有名詞 Glossary"),
@@ -295,7 +312,9 @@ async function groupPage(groupId) {
   $save.onclick = async () => {
     $save.disabled = true;
     try {
-      await api("/api/groups/" + encodeURIComponent(groupId) + "/settings", { method: "PUT", body: JSON.stringify(draft) });
+      const body = JSON.parse(JSON.stringify(draft));
+      if (!g.engines.length) { delete body.translate.engineChoice; delete body.translate.tone; delete body.translate.toneNote; }
+      await api("/api/groups/" + encodeURIComponent(groupId) + "/settings", { method: "PUT", body: JSON.stringify(body) });
       toast("✅ 已儲存 Saved");
       await groupPage(groupId);
     } catch (err) {
@@ -306,6 +325,17 @@ async function groupPage(groupId) {
   };
 }
 
+function accountCard(a, title) {
+  const pct = a.limit ? Math.min(100, Math.round((a.used / a.limit) * 100)) : 0;
+  return h("div", { class: "card" },
+    h("h2", {}, "💑 " + title),
+    h("p", { class: "sub" }, a.plan, a.planUntil ? "，到期 " + a.planUntil : ""),
+    h("div", { class: "bar" }, h("i", { class: pct >= 90 ? "hot" : "", style: "width:" + pct + "%" })),
+    h("div", { class: "muted" }, "本月 This month：" + fmt(a.used) + " / " + fmt(a.limit) + " 字（" + pct + "%）"),
+    h("div", { class: "muted" }, "加購剩餘 Top-up left：" + fmt(a.bonusChars) + " 字"),
+    h("p", { class: "note" }, "把我拉進任何群組後輸入 /activate 就能開通，不限群組數量。額度用完會自動扣加購字數；加購 " + fmt(a.topUp.chars) + " 字 NT$" + a.topUp.price + "，在群組輸入 /topup 加購碼。"));
+}
+
 // ---------- platform admin ----------
 function adminTabs(active) {
   $app.classList.add("wide");
@@ -313,6 +343,7 @@ function adminTabs(active) {
     h("button", { onclick: () => home().catch(fail) }, "我的群組"),
     h("button", { class: active === "groups" ? "on" : "", onclick: () => adminGroups().catch(fail) }, "所有群組"),
     h("button", { class: active === "codes" ? "on" : "", onclick: () => adminCodes().catch(fail) }, "啟用碼"),
+    h("button", { class: active === "accounts" ? "on" : "", onclick: () => adminAccounts().catch(fail) }, "雙人版帳號"),
     h("button", { class: active === "channels" ? "on" : "", onclick: () => adminChannels().catch(fail) }, "白牌頻道"));
 }
 
@@ -403,7 +434,9 @@ async function adminCodes() {
   const [codes, channels] = await Promise.all([api("/api/admin/codes"), api("/api/admin/channels")]);
   const f = {
     label: h("input", { type: "text", placeholder: "例：王師傅工班" }),
-    plan: h("select", {}, h("option", { value: "free" }, "免費 Free"), h("option", { value: "pro" }, "專業版 Pro")),
+    kind: h("select", {}, h("option", { value: "activate" }, "開通碼 Activation"), h("option", { value: "topup" }, "加購碼 Top-up")),
+    chars: h("input", { type: "number", min: 1, value: 100000 }),
+    plan: h("select", {}, h("option", { value: "free" }, "免費 Free"), h("option", { value: "pro" }, "專業版 Pro（群組）"), h("option", { value: "duo" }, "雙人版 Duo（個人）")),
     planUntil: h("input", { type: "date" }),
     channelId: h("select", {}, h("option", { value: "default" }, "預設官方帳號"), channels.filter((c) => c.joinPolicy === "code").map((c) => h("option", { value: c.channelId }, c.name))),
     validDays: h("input", { type: "number", min: 0, max: 365, value: 30 }),
@@ -416,7 +449,9 @@ async function adminCodes() {
       const body = Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]));
       const created = await api("/api/admin/codes", { method: "POST", body: JSON.stringify(body) });
       const until = (c) => (c.expiresAt ? "，" + c.expiresAt.slice(0, 10) + " 前有效" : "");
-      const message = (c) => "把機器人加入 LINE 群組後，在群組輸入：\n/activate " + c.code + "\n（限用一次" + until(c) + "）";
+      const message = (c) => c.kind === "topup"
+        ? "在任一個已開通的群組輸入：\n/topup " + c.code + "\n可加購 " + fmt(c.chars) + " 字（限用一次" + until(c) + "）"
+        : "把機器人加入 LINE 群組後，在群組輸入：\n/activate " + c.code + "\n（限用一次" + until(c) + "）";
       result.replaceChildren(h("div", { class: "card" }, h("h2", {}, "✅ 已產生，傳給客戶這段文字"),
         created.map((c) => h("div", { class: "row" },
           h("div", { style: "white-space:pre-line" }, message(c)),
@@ -436,7 +471,7 @@ async function adminCodes() {
       return h("tr", {},
         h("td", {}, h("code", {}, c.code), " ", c.status === "unused" ? h("button", { class: "back", style: "margin:0", onclick: () => copyText(c.code) }, "📋") : ""),
         h("td", {}, c.label || "—"),
-        h("td", {}, c.plan === "pro" ? "Pro" + (c.planUntil ? " 到 " + c.planUntil : "") : "Free"),
+        h("td", {}, c.kind === "topup" ? "加購 " + fmt(c.chars) + " 字" : ({ pro: "Pro", duo: "Duo", free: "Free" }[c.plan] || c.plan) + (c.planUntil ? " 到 " + c.planUntil : "")),
         h("td", {}, c.channelId),
         h("td", {}, h("span", { class: c.status === "unused" ? "badge pro" : "badge" }, STATUS_LABEL[c.status])),
         h("td", {}, c.status === "used" ? (c.usedGroup || "") + " · " + (c.usedAt || "").slice(0, 10) : c.expiresAt ? c.expiresAt.slice(0, 10) + " 到期" : "不過期"),
@@ -453,6 +488,8 @@ async function adminCodes() {
     adminTabs("codes"),
     h("div", { class: "card" }, h("h2", {}, "產生新的啟用碼"),
       h("div", { class: "grid2" },
+        h("label", { class: "field" }, "種類", f.kind),
+        h("label", { class: "field" }, "加購字數（加購碼才用）", f.chars),
         h("label", { class: "field" }, "給誰（備註）", f.label),
         h("label", { class: "field" }, "頻道", f.channelId),
         h("label", { class: "field" }, "方案", f.plan),
@@ -543,6 +580,36 @@ async function formPage(kind, liffId) {
   refresh();
 }
 
+async function adminAccounts() {
+  $savebar.hidden = true;
+  const accounts = await api("/api/admin/accounts");
+  const rows = accounts.map((a) => {
+    const add = h("input", { type: "number", placeholder: "例：100000", style: "width:120px" });
+    const until = h("input", { type: "date", value: a.planUntil || "" });
+    const save = h("button", { class: "primary", onclick: async () => {
+      save.disabled = true;
+      try {
+        await api("/api/admin/accounts/" + encodeURIComponent(a.accountId), { method: "PUT", body: JSON.stringify({ bonusAdd: add.value, planUntil: until.value }) });
+        toast("✅ 已更新");
+        await adminAccounts();
+      } catch (err) { toast("⚠️ " + err.message); } finally { save.disabled = false; }
+    } }, "更新");
+    return h("tr", {},
+      h("td", {}, h("code", {}, a.accountId.split(":").pop().slice(0, 10) + "…")),
+      h("td", {}, a.plan), h("td", {}, until),
+      h("td", {}, fmt(a.used) + " / " + fmt(a.limit)),
+      h("td", {}, fmt(a.bonusChars)), h("td", {}, add), h("td", {}, save));
+  });
+  $app.replaceChildren(
+    h("h1", {}, "雙人版帳號 Duo accounts"),
+    h("p", { class: "sub" }, "收款後在這裡手動加購字數或延長到期日；也可以到「啟用碼」分頁產生加購碼給用戶自己輸入。"),
+    adminTabs("accounts"),
+    h("div", { class: "card scroll" }, rows.length
+      ? h("table", {}, h("thead", {}, h("tr", {}, ["帳號", "方案", "到期日", "本月用量", "加購剩餘", "手動加值（字）", ""].map((x) => h("th", {}, x)))), h("tbody", {}, rows))
+      : h("p", { class: "muted" }, "還沒有雙人版帳號。")),
+  );
+}
+
 // ---------- start ----------
 (async () => {
   try {
@@ -560,6 +627,8 @@ async function formPage(kind, liffId) {
       await groupPage(target);
     } else if (location.hash === "#admin") {
       await adminGroups();
+    } else if (location.hash === "#accounts") {
+      await adminAccounts();
     } else if (location.hash === "#codes") {
       await adminCodes();
     } else if (location.hash === "#channels") {

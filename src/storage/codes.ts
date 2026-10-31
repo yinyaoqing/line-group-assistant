@@ -12,9 +12,13 @@ export interface ActivationCode {
   usedGroup?: string;
   usedBy?: string;
   usedAt?: string;
+  /** "activate" (default) opens a group, optionally on a plan; "topup" adds characters to an account. */
+  kind?: "activate" | "topup";
+  /** Characters a topup code adds. */
+  chars?: number;
 }
 
-export type NewCode = Pick<ActivationCode, "label" | "channelId" | "plan" | "planUntil" | "expiresAt" | "createdBy">;
+export type NewCode = Pick<ActivationCode, "label" | "channelId" | "plan" | "planUntil" | "expiresAt" | "createdBy" | "kind" | "chars">;
 
 export interface CodeRepo {
   create(spec: NewCode): Promise<ActivationCode>;
@@ -23,7 +27,7 @@ export interface CodeRepo {
    * Use a code for a group, once: succeeds only for an unused, unexpired code of
    * this channel, and marks it used in the same step so it cannot be used twice.
    */
-  redeem(input: string, channelId: string, groupId: string, userId: string | undefined, now?: Date): Promise<ActivationCode | undefined>;
+  redeem(input: string, channelId: string, groupId: string, userId: string | undefined, now?: Date, kind?: "activate" | "topup"): Promise<ActivationCode | undefined>;
   /** Delete an unused code; returns false if it was used or does not exist. */
   revoke(code: string): Promise<boolean>;
 }
@@ -55,6 +59,8 @@ interface CodeRecord {
   used_group: string | null;
   used_by: string | null;
   used_at: string | null;
+  kind?: string | null;
+  chars?: number | null;
 }
 
 const fromRecord = (r: CodeRecord): ActivationCode => ({
@@ -69,6 +75,8 @@ const fromRecord = (r: CodeRecord): ActivationCode => ({
   usedGroup: r.used_group ?? undefined,
   usedBy: r.used_by ?? undefined,
   usedAt: r.used_at ?? undefined,
+  kind: r.kind === "topup" ? "topup" : "activate",
+  chars: r.chars ?? 0,
 });
 
 export class D1CodeRepo implements CodeRepo {
@@ -77,8 +85,8 @@ export class D1CodeRepo implements CodeRepo {
   async create(spec: NewCode) {
     const code = newCode();
     await this.db
-      .prepare("INSERT INTO activation_codes (code, label, channel_id, plan, plan_until, expires_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .bind(code, spec.label, spec.channelId, spec.plan, spec.planUntil ?? null, spec.expiresAt ?? null, spec.createdBy ?? null)
+      .prepare("INSERT INTO activation_codes (code, label, channel_id, plan, plan_until, expires_at, created_by, kind, chars) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .bind(code, spec.label, spec.channelId, spec.plan, spec.planUntil ?? null, spec.expiresAt ?? null, spec.createdBy ?? null, spec.kind ?? "activate", spec.chars ?? 0)
       .run();
     return { ...spec, code };
   }
@@ -88,14 +96,14 @@ export class D1CodeRepo implements CodeRepo {
     return results.map(fromRecord);
   }
 
-  async redeem(input: string, channelId: string, groupId: string, userId: string | undefined, now = new Date()) {
+  async redeem(input: string, channelId: string, groupId: string, userId: string | undefined, now = new Date(), kind: "activate" | "topup" = "activate") {
     const r = await this.db
       .prepare(
         `UPDATE activation_codes SET used_group = ?, used_by = ?, used_at = ?
-         WHERE code = ? AND channel_id = ? AND used_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
+         WHERE code = ? AND channel_id = ? AND kind = ? AND used_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
          RETURNING *`,
       )
-      .bind(groupId, userId ?? null, now.toISOString(), normalizeCode(input), channelId, now.toISOString())
+      .bind(groupId, userId ?? null, now.toISOString(), normalizeCode(input), channelId, kind, now.toISOString())
       .first<CodeRecord>();
     return r ? fromRecord(r) : undefined;
   }
@@ -119,9 +127,9 @@ export class MemoryCodeRepo implements CodeRepo {
     return [...this.codes].reverse();
   }
 
-  async redeem(input: string, channelId: string, groupId: string, userId: string | undefined, now = new Date()) {
+  async redeem(input: string, channelId: string, groupId: string, userId: string | undefined, now = new Date(), kind: "activate" | "topup" = "activate") {
     const c = this.codes.find((x) => x.code === normalizeCode(input));
-    if (!c || c.channelId !== channelId || c.usedAt || (c.expiresAt && c.expiresAt <= now.toISOString())) return undefined;
+    if (!c || c.channelId !== channelId || (c.kind ?? "activate") !== kind || c.usedAt || (c.expiresAt && c.expiresAt <= now.toISOString())) return undefined;
     Object.assign(c, { usedGroup: groupId, usedBy: userId, usedAt: now.toISOString() });
     return c;
   }

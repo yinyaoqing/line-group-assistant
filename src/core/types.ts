@@ -1,4 +1,5 @@
 import type { Plan } from "../../config/plans";
+import type { Account } from "../storage/accounts";
 import type { Storage } from "../storage/types";
 
 /** Secrets and bindings provided by the Workers runtime. */
@@ -59,6 +60,10 @@ export interface GroupConfig {
   /** Plan id ("free" | "pro") and, for paid plans, the last day it is paid for (YYYY-MM-DD). */
   plan?: string;
   planUntil?: string;
+  /** Set when the group is bound to a member's per-user subscription (Duo): it then uses that plan and allowance. */
+  accountId?: string;
+  /** The bound account, loaded per event by the dispatcher; not stored with the group. */
+  account?: Account;
   plugins: string[];
   storage?: { type: "d1" } | { type: "sheets"; sheetId: string } | { type: "memory" };
   /** Plugin-specific settings, keyed by plugin name. */
@@ -82,7 +87,12 @@ export interface PluginContext {
   push(messages: LineMessage[]): Promise<void>;
   /** The group's plan in force (expired paid plans count as free). */
   plan: Plan;
-  /** This group's metered usage for the current month, e.g. "translate_chars". */
+  /**
+   * Top-up characters of the account this group bills to (per-user plans);
+   * spent after the monthly allowance. Undefined for groups billed on their own.
+   */
+  bonus?: { get(): Promise<number>; consume(chars: number): Promise<void> };
+  /** This group's metered usage for the current month, e.g. "translate_chars" (its account's, when bound to one). */
   usage: {
     get(metric: string): Promise<number>;
     add(metric: string, amount: number): Promise<void>;
