@@ -343,11 +343,24 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   // Stickers, photos, non-command taps: nothing to answer, but queued messages can still go out.
   if (!input) return sendQ([]);
   if (viaButton && !pre) return sendQ([]); // buttons only ever stand for commands
+  // A tapped Confirm (or any button) settles whatever the assistant was waiting on.
+  if (viaButton && userId) await takePending(deps.storageFor(group), userId, event.timestamp).catch(() => undefined);
+
+  const mentionees = event.message?.mention?.mentionees ?? [];
+  const request = stripSelfMention(input, mentionees);
+
+  // "要" / "是" / "不用" after the assistant asked: the answer applies to the command it is holding.
+  if (!pre && !viaButton && userId && (YES.test(request) || NO.test(request))) {
+    const pending = await takePending(deps.storageFor(group), userId, event.timestamp);
+    if (pending) {
+      if (NO.test(request)) return sendQ([text("👌 好，取消了。Cancelled.")]);
+      return handleEvent({ ...event, message: { type: "text", id: event.message!.id, text: pending } }, deps);
+    }
+  }
 
   // "@bot …" in plain words: the AI assistant turns it into a command.
-  const mentionees = event.message?.mention?.mentionees ?? [];
   if (!pre && mentionees.some((m) => m.isSelf)) {
-    const reply = await assistantReply(stripSelfMention(input, mentionees), group, active, userId, deps);
+    const reply = await assistantReply(request, group, active, userId, deps, event.timestamp);
     if (reply.run) return handleEvent({ ...event, message: { type: "text", id: event.message!.id, text: reply.run } }, deps);
     return sendQ(reply.messages);
   }
@@ -416,6 +429,7 @@ async function assistantReply(
   active: Plugin[],
   userId: string | undefined,
   deps: Deps,
+  now: number,
 ): Promise<{ run?: string; messages: LineMessage[] }> {
   const say = (msg: string) => ({ messages: [text(msg)] });
   if (!groupPlan(group).ai) {
@@ -432,7 +446,9 @@ async function assistantReply(
     await ctx.usage.add(AI_METRIC, 1);
     if (decision.kind === "answer") return say(`🤖 ${decision.reply}`);
     if (isReadOnly(decision.command)) return { run: decision.command, messages: [] };
-    // Anything that changes data waits for a tap, so a misread request is never applied silently.
+    // Anything that changes data waits for a tap, or a "要"/"yes" within CONFIRM_WINDOW_MS,
+    // so a misread request is never applied silently.
+    if (userId) await rememberPending(deps.storageFor(group), userId, decision.command, now);
     return {
       messages: [
         {
@@ -450,6 +466,32 @@ async function assistantReply(
     console.error("assistant failed", err);
     return say("⚠️ AI 助理暫時無法使用，請改用 /menu 或指令。\nThe assistant is unavailable right now.");
   }
+}
+
+/**
+ * Where a "@bot …" request waits for its yes: the group's "assistant" table,
+ * one row per member, holding the command and when the offer expires. The
+ * Confirm button still works; this lets a typed 要／是／ok (or 不用 to drop it)
+ * do the same, since that is what people answer a question with.
+ */
+const CONFIRM_TABLE = "assistant";
+export const CONFIRM_WINDOW_MS = 10 * 60 * 1000;
+const YES = /^(要|是|是的|好|好的|好啊|對|可以|確認|執行|沒錯|ok|okay|yes|y|đúng|vâng|ừ|ya|iya|ใช่|oo|opo|はい)[!！。.~～]*$/i;
+const NO = /^(不要|不用|不是|不對|取消|算了|no|n|nope|không|tidak|ไม่|hindi|いいえ)[!！。.~～]*$/i;
+
+async function rememberPending(storage: Storage, userId: string, command: string, now: number): Promise<void> {
+  const row = (await storage.list(CONFIRM_TABLE)).find((r) => r.userId === userId);
+  const fields = { command, until: new Date(now + CONFIRM_WINDOW_MS).toISOString() };
+  if (row) await storage.update(CONFIRM_TABLE, row.id, fields);
+  else await storage.append(CONFIRM_TABLE, { userId, ...fields });
+}
+
+/** The member's pending command if it has not expired; either way it is cleared, so an answer counts once. */
+async function takePending(storage: Storage, userId: string, now: number): Promise<string | undefined> {
+  const row = (await storage.list(CONFIRM_TABLE)).find((r) => r.userId === userId);
+  if (!row?.command) return undefined;
+  await storage.update(CONFIRM_TABLE, row.id, { command: "", until: "" });
+  return new Date(row.until ?? 0).getTime() >= now ? row.command : undefined;
 }
 
 /**

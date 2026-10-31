@@ -134,4 +134,33 @@ describe("@bot in a group", () => {
     expect(textOf(w.replies[1]?.[0])).toContain("AI 助理暫時無法使用");
     err.mockRestore();
   });
+  it("a typed 是/要 within ten minutes runs the pending command once; 不用 drops it; late answers do nothing", async () => {
+    const w = world("pro");
+    interpret.mockResolvedValue({ kind: "command", command: "/tool 線鋸 2", reply: "Thêm 2 線鋸?" });
+    const plain = (text: string, timestamp = 1000): LineEvent => ({ type: "message", replyToken: "r", timestamp, source: { type: "group", groupId: "Cg", userId: "U2" }, message: { type: "text", id: "m2", text } });
+
+    await handleEvent(mention("thêm 2 cái 線鋸"), w.deps);
+    await handleEvent(plain("是"), w.deps);
+    expect((await w.storage.list("tools"))[0]).toMatchObject({ name: "線鋸", qty: "2" });
+    await handleEvent(plain("是"), w.deps); // already used up
+    expect(await w.storage.list("tools")).toHaveLength(1);
+    expect(interpret).toHaveBeenCalledTimes(1);
+
+    await handleEvent(mention("thêm 2 cái 線鋸"), w.deps);
+    await handleEvent(plain("不用"), w.deps);
+    expect(textOf(w.replies[w.replies.length - 1]?.[0])).toContain("取消");
+    await handleEvent(plain("要"), w.deps);
+    expect(await w.storage.list("tools")).toHaveLength(1);
+
+    await handleEvent(mention("thêm 2 cái 線鋸"), w.deps);
+    await handleEvent(plain("是", 11 * 60 * 1000), w.deps); // past the window
+    expect(await w.storage.list("tools")).toHaveLength(1);
+
+    // "@bot 要" goes the same way, without a round trip to Claude.
+    await handleEvent(mention("thêm 2 cái 線鋸"), w.deps);
+    const calls = interpret.mock.calls.length;
+    await handleEvent({ ...mention("要"), timestamp: 5 }, w.deps);
+    expect((await w.storage.list("tools"))[0]).toMatchObject({ name: "線鋸", qty: "4" }); // counted on top of the first 2
+    expect(interpret.mock.calls.length).toBe(calls);
+  });
 });

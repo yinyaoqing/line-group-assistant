@@ -41,7 +41,9 @@ Rules:
 - Output JSON only, matching the schema. kind "command": put the full command line in "command" (it must start with "/" and use one of the listed commands; keep names, item names and task titles in the words the member used). kind "answer": leave "command" empty.
 - "reply" is one short sentence in the member's language: for a command, what you are about to do (e.g. "Add 2 to 線鋸?"); for an answer, the answer.
 - Refer to tasks by their number from the open-task list. Dates are M/D. Owners are written "@name".
-- If the request is ambiguous or needs a command that is not listed, answer with a short clarifying question instead of guessing.`;
+- Never ask the member whether to go ahead, and never answer with a "shall I…?" question: when a command can be formed, return kind "command"; the app shows a Confirm button itself.
+- A detail the command cannot hold (a time of day, a place, a note) goes into the task title in the member's words, e.g. "/add 早上九點去南部弄假牙 @Joseph 11/2"; do not refuse or ask because of it.
+- Only when the request is truly ambiguous, or needs a command that is not listed, answer with a short clarifying question instead of guessing.`;
 
 const SCHEMA = {
   type: "object",
