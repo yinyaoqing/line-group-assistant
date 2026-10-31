@@ -80,6 +80,7 @@ ${iconLinks()}
   .phone .top { text-align: center; font-weight: 700; color: #fff; margin: -4px 0 12px; font-size: 14px; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
   .msg { display: flex; gap: 8px; margin: 10px 0; align-items: flex-end; }
   .msg .av { width: 30px; height: 30px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 13px; color: #fff; font-weight: 700; }
+  img.av { object-fit: cover; background: #fff; }
   .msg .who { font-size: 11px; color: #fff; opacity: .9; margin: 0 0 2px 2px; }
   .b { background: var(--bubble); color: var(--ink); padding: 8px 12px; border-radius: 16px; border-top-left-radius: 4px; max-width: 260px; }
   .msg.me { justify-content: flex-end; }
@@ -168,11 +169,11 @@ ${iconLinks()}
     <div class="phone" role="img" aria-label="群組對話示意：中文與越南文自動互譯、新增任務、完成回報">
       <div class="top">🏗️ 南港工地群組（12）</div>
       <div class="msg"><div class="av" style="background:#e07a3f">明</div><div><div class="who">阿明</div><div class="b">明天早上七點工地集合，記得帶安全帽</div></div></div>
-      <div class="msg"><div class="av" style="background:var(--green)">${esc(SITE.mark)}</div><div><div class="who">${name}</div><div class="b bot">🌐 阿明<br>🇻🇳 Sáng mai 7 giờ tập trung tại công trường, nhớ mang mũ bảo hộ.<br>🇺🇸 Meet at the site at 7am tomorrow, bring your helmet.</div></div></div>
+      <div class="msg"><img class="av" src="${LOGO_PATH}" alt="${name}"><div><div class="who">${name}</div><div class="b bot">🌐 阿明<br>🇻🇳 Sáng mai 7 giờ tập trung tại công trường, nhớ mang mũ bảo hộ.<br>🇺🇸 Meet at the site at 7am tomorrow, bring your helmet.</div></div></div>
       <div class="msg"><div class="av" style="background:#7a5ad6">T</div><div><div class="who">Tuấn</div><div class="b">Dạ, em sẽ mang thêm máy cưa.</div></div></div>
-      <div class="msg"><div class="av" style="background:var(--green)">${esc(SITE.mark)}</div><div><div class="who">${name}</div><div class="b bot">🌐 Tuấn：好的，我會多帶一台鋸子。</div></div></div>
+      <div class="msg"><img class="av" src="${LOGO_PATH}" alt="${name}"><div><div class="who">${name}</div><div class="b bot">🌐 Tuấn：好的，我會多帶一台鋸子。</div></div></div>
       <div class="msg me"><div class="b">/add 租鷹架 @Tuấn 10/20</div></div>
-      <div class="msg"><div class="av" style="background:var(--green)">${esc(SITE.mark)}</div><div><div class="who">${name}</div><div class="b bot">➕ #3 租鷹架 / Thuê giàn giáo<small>👤 Tuấn　⏰ 10/20　[未開始]</small></div></div></div>
+      <div class="msg"><img class="av" src="${LOGO_PATH}" alt="${name}"><div><div class="who">${name}</div><div class="b bot">➕ #3 租鷹架 / Thuê giàn giáo<small>👤 Tuấn　⏰ 10/20　[未開始]</small></div></div></div>
       <div class="chips"><span>🌐 翻譯</span><span>📋 任務</span><span>🔧 工具</span><span>🧱 材料</span><span>📱 選單</span></div>
     </div>
   </div>
