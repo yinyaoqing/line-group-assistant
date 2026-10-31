@@ -1,3 +1,4 @@
+import { SITE } from "../config/site";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { effectivePlan, PLANS } from "../config/plans";
 import { handleApi, type ApiDeps } from "../src/api";
@@ -701,7 +702,7 @@ describe("product site", () => {
     const html = siteHtml("https://bot.example");
     expect(html).toContain(`NT$${PLANS.pro.price} <small>／群組／月</small>`);
     expect(html).toContain(`每月翻譯 ${PLANS.free.monthlyChars.toLocaleString("en-US")} 字`);
-    expect(html).toContain("https://line.me/R/ti/p/%40021eubwk");
+    expect(html).toContain("https://line.me/R/ti/p/" + encodeURIComponent(SITE.lineId));
     expect(html).toContain('<meta property="og:url" content="https://bot.example/">');
   });
 });

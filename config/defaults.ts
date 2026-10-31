@@ -17,7 +17,9 @@ export const defaultGroup = (groupId: string, channelId = "default"): GroupConfi
       trigger: "all", // "all": every message; "command": only /t
       showName: true,
       languages: ["zh-TW", "en"], // see config/languages.ts; the plan limits which are usable
-      targetMode: "members", // only translate into languages members use; new members pick theirs
+      // "all": every language the group chose. "members" (only languages members have written in) leaves a group
+      // where everyone writes Chinese with nothing to translate into, and read-only members never get translations.
+      targetMode: "all",
     },
     tasks: { digest: false }, // weekly push costs message quota, so off by default
     culture: { leadDays: 2 }, // festival reminders ride on the next free reply, so on by default
