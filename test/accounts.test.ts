@@ -5,7 +5,7 @@ import { handleEvent, handleSchedule, type Deps } from "../src/core/dispatcher";
 import type { LineApi } from "../src/core/line";
 import type { GroupConfig, LineEvent, LineMessage } from "../src/core/types";
 import { plugins } from "../src/plugins";
-import { claudeSystemPrompt, engines } from "../src/plugins/translate/engines";
+import { claudeSystemPrompt, cleanTranslation, engines } from "../src/plugins/translate/engines";
 import { accountUsageKey, MemoryAccountRepo } from "../src/storage/accounts";
 import { MemoryAdminRepo } from "../src/storage/admins";
 import { MemoryChannelRepo } from "../src/storage/channels";
@@ -355,5 +355,35 @@ describe("Claude translation requests", () => {
     await engines.claude!("你好", "en", env, { model: "claude-opus-5-5" }, f);
     expect(bodies[0]!.thinking).toBeUndefined();
     expect(bodies[0]).toMatchObject({ fallbacks: "default" });
+  });
+});
+
+describe("cleaning Claude's output", () => {
+  // Real outputs from a measurement run with the earlier prompt.
+  it("keeps only the final answer when the model corrected itself", () => {
+    const out = [
+      "Trimmer beam dan joist harus diukur dulu baru dipotong, jangan langsung dipotong.",
+      "",
+      "Wait, the glossary says 收頭樑 = trimmer beam and 格柵 = joist, so I should use those terms exactly. Corrected:",
+      "",
+      "Trimmer beam dan joist harus diukur dulu baru dipotong, jangan langsung dipotong.",
+    ].join("\n");
+    expect(cleanTranslation(out, "收頭樑跟格柵都要先量好再裁，不要直接切")).toBe("Trimmer beam dan joist harus diukur dulu baru dipotong, jangan langsung dipotong.");
+  });
+
+  it("refuses to post when nothing but commentary is left", () => {
+    expect(() => cleanTranslation("Wait, I need to check the glossary first.", "收頭樑")).toThrow(/commentary/);
+  });
+
+  it("drops quotation marks the model added, but keeps the ones the member wrote", () => {
+    expect(cleanTranslation('"What about that one?"', "那個呢？")).toBe("What about that one?");
+    expect(cleanTranslation("「那個呢？」", "What about that one?")).toBe("那個呢？");
+    expect(cleanTranslation('"Ship it" was his answer.', '"出貨"是他的回答')).toBe('"Ship it" was his answer.');
+    expect(cleanTranslation('"OK"', '"好"')).toBe('"OK"');
+  });
+
+  it("leaves ordinary translations alone, including ones that merely start with similar words", () => {
+    expect(cleanTranslation("  Have you eaten yet, sweetheart?  ", "你吃飯了嗎？")).toBe("Have you eaten yet, sweetheart?");
+    expect(cleanTranslation("Waiting for the truck now.", "在等卡車")).toBe("Waiting for the truck now.");
   });
 });
