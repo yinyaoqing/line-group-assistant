@@ -7,7 +7,7 @@ export const SITE = {
   /** Where the name comes from, shown under the hero. */
   story: "「通事」是清代在不同語言的族群之間翻譯、協調的人。今天，它住在你的 LINE 群組裡。",
   /** The official account people add to ask about plans; also the bot they invite. */
-  lineId: "@021eubwk",
+  lineId: "@332bmkbr",
   /** Shown as the white-label price. */
   enterprisePrice: "專案報價",
   /** Shown on /privacy and /terms next to the LINE account; leave empty to show LINE only. */
