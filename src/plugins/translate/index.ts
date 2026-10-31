@@ -139,6 +139,13 @@ export const USAGE_METRIC = "translate_chars";
 
 export class QuotaExceeded extends Error {}
 
+/**
+ * Every engine call costs about the same for its instructions, however short the
+ * message, so each counts as at least this many characters of the allowance.
+ */
+export const MIN_BILLED_CHARS = 10;
+const billedLength = (source: string) => Math.max(source.length, MIN_BILLED_CHARS);
+
 async function run(source: string, userId: string | undefined, ctx: Ctx, explicit: boolean) {
   try {
     return await translateText(source, userId, ctx);
@@ -223,7 +230,7 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
   if (limit > 0) {
     // Check what this message will cost before calling any engine, so the last few
     // characters of an allowance cannot pay for a long message in seven languages.
-    const estimate = Math.ceil(source.length * targets.length * engineWeight(s));
+    const estimate = Math.ceil(billedLength(source) * targets.length * engineWeight(s));
     const left = Math.max(0, limit - usedBefore) + (t.bonus ? await t.bonus.get() : 0);
     if (estimate > left) throw new QuotaExceeded();
   }
@@ -245,7 +252,7 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
   }
   results.push(...(await Promise.all(targets.map(call))));
   // Costlier engines count for more allowance characters (config/plans.ts ENGINE_WEIGHT).
-  const charged = Math.ceil(source.length * calls * engineWeight(s));
+  const charged = Math.ceil(billedLength(source) * calls * engineWeight(s));
   await t.usage.add(USAGE_METRIC, charged);
   if (t.bonus && limit > 0) {
     const overflow = Math.max(0, usedBefore + charged - limit) - Math.max(0, usedBefore - limit);

@@ -263,10 +263,10 @@ describe("group registration and activation", () => {
 
 describe("translation quota", () => {
   it("counts translated characters and stops at the monthly limit", async () => {
-    const { deps, replies, usage } = setup({ groupId: "Cquota", settings: { translate: { engine: "claude", monthlyChars: 5 } } });
+    const { deps, replies, usage } = setup({ groupId: "Cquota", settings: { translate: { engine: "claude", monthlyChars: 12 } } });
     const spy = vi.spyOn(engines, "claude").mockResolvedValue("Hello");
     await handleEvent(msg("大家早安喔", "Cquota"), deps);
-    expect(await usage.get("Cquota", "translate_chars")).toBe(5);
+    expect(await usage.get("Cquota", "translate_chars")).toBe(10); // 5 characters, counted as the 10 minimum
     await handleEvent(msg("明天見", "Cquota"), deps);
     expect(spy).toHaveBeenCalledTimes(1);
     expect(textOf(replies[1]?.[0])).toContain("額度已用完");

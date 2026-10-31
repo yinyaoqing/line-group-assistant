@@ -200,10 +200,11 @@ describe("accounts and /activate", () => {
     const spy = vi.spyOn(engines, "claude").mockResolvedValue("Good morning");
     await handleEvent(msg("大家早安", "U1", "Ca"), w.deps);
     await handleEvent(msg("大家早安", "U2", "Cb"), w.deps);
-    expect(await w.usage.get(accountUsageKey(A1), "translate_chars")).toBe(8);
+    // Each message is 4 characters but counts as the 10-character minimum.
+    expect(await w.usage.get(accountUsageKey(A1), "translate_chars")).toBe(20);
     expect(await w.usage.get("Ca", "translate_chars")).toBe(0);
     await handleEvent(msg("/usage", "U1", "Cb"), w.deps);
-    expect(w.last()).toContain("8 / 300,000");
+    expect(w.last()).toContain("20 / 300,000");
     expect(w.last()).toContain("所有群組合計");
     expect(w.last()).toContain("0 / 100 次");
     spy.mockRestore();
@@ -214,19 +215,19 @@ describe("accounts and /activate", () => {
     const spy = vi.spyOn(engines, "claude").mockResolvedValue("Good morning");
     await handleEvent(msg("大家早安", "U1", "Ca"), w.deps);
     expect(spy.mock.calls[0]![3]).toMatchObject({ model: "claude-opus-5-5" });
-    expect(await w.usage.get(accountUsageKey(A1), "translate_chars")).toBe(60);
+    expect(await w.usage.get(accountUsageKey(A1), "translate_chars")).toBe(150); // 10-character minimum × 15
     spy.mockRestore();
   });
 
   it("checks a message's cost before translating it, then spends top-ups (Advanced) past the allowance", async () => {
     const w = await paidWorld("advanced");
     const spy = vi.spyOn(engines, "claude").mockResolvedValue("Good morning");
-    await w.usage.add(accountUsageKey(A1), "translate_chars", 1_499_998);
-    await handleEvent(msg("大家早安", "U1", "Ca"), w.deps); // costs 4, only 2 left: refused before any call
+    await w.usage.add(accountUsageKey(A1), "translate_chars", 1_499_996);
+    await handleEvent(msg("大家早安", "U1", "Ca"), w.deps); // counts as 10, only 4 left: refused before any call
     expect(spy).not.toHaveBeenCalled();
     expect(w.last()).toContain("額度已用完");
-    await w.accounts.addBonus(A1, 3);
-    await handleEvent(msg("大家早安", "U1", "Cb"), w.deps); // 2 from the allowance, 2 from top-ups
+    await w.accounts.addBonus(A1, 7);
+    await handleEvent(msg("大家早安", "U1", "Cb"), w.deps); // 4 from the allowance, 6 from top-ups
     expect(spy).toHaveBeenCalledTimes(1);
     expect((await w.accounts.get(A1))?.bonusChars).toBe(1);
     spy.mockRestore();
@@ -355,6 +356,19 @@ describe("Claude translation requests", () => {
     await engines.claude!("你好", "en", env, { model: "claude-opus-5-5" }, f);
     expect(bodies[0]!.thinking).toBeUndefined();
     expect(bodies[0]).toMatchObject({ fallbacks: "default" });
+  });
+});
+
+describe("translation instructions", () => {
+  it("carry only the lines a message needs", () => {
+    const plainEn = claudeSystemPrompt("en", {}, "See you tomorrow");
+    expect(plainEn).not.toContain("Taiwan");
+    expect(plainEn).not.toContain("gender");
+    expect(plainEn).not.toContain("register"); // the natural tone is the default and needs no line
+    expect(claudeSystemPrompt("en", {}, "工課明仔載才閣做")).toContain("工課 = work");
+    expect(claudeSystemPrompt("th", {}, "收到")).toContain("ครับ");
+    expect(claudeSystemPrompt("id", {}, "收到")).not.toContain("gender");
+    expect(claudeSystemPrompt("en", { tone: "affectionate", glossary: "格柵 = joist" }, "格柵")).toMatch(/affectionate[\s\S]*格柵 = joist/);
   });
 });
 

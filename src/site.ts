@@ -262,7 +262,7 @@ export function siteHtml(origin: string): string {
           <a class="btn ghost" href="${join}">聯絡我們</a>
         </div>
       </div>
-      <p class="note">付款方式為轉帳，收款後由我們為你的帳號開通方案。翻譯以 Claude Haiku 計算；選用 Claude Opus 時每字以 15 字計。</p>
+      <p class="note">付款方式為轉帳，收款後由我們為你的帳號開通方案。翻譯以 Claude Haiku 計算，每則翻成每種語言至少以 10 字計；選用 Claude Opus 時每字以 15 字計。</p>
     </div>
   </section>
 

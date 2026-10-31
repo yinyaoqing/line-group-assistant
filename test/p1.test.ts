@@ -111,7 +111,7 @@ describe("multi-language translation", () => {
     await handleEvent(msg("大家早安"), w.deps);
     expect(spy.mock.calls.map((c) => c[1]).sort()).toEqual(["en", "vi"]);
     expect(textOf(w.replies[0]?.[0])).toBe("🌐 Joseph\n🇺🇸 [en]\n🇻🇳 [vi]");
-    expect(await w.usage.get("Cg", "translate_chars")).toBe(144); // 4 chars × 2 calls × 18 (Google costs 18× Haiku)
+    expect(await w.usage.get("Cg", "translate_chars")).toBe(360); // 10 (the per-call minimum) × 2 calls × 18 (Google costs 18× Haiku)
     spy.mockRestore();
   });
 
@@ -468,7 +468,7 @@ describe("translated tasks and items", () => {
     const { tasksCsv, buildReport } = await import("../src/report");
     const csv = tasksCsv(await buildReport((await w.repo.get("Cg"))!, w.deps.storageFor(active())));
     expect(csv).toContain("買早餐,Buy breakfast / Mua bữa sáng,");
-    expect(await w.usage.get("Cg", "translate_chars")).toBe(108); // 3 chars × 2 languages × 18 (Google)
+    expect(await w.usage.get("Cg", "translate_chars")).toBe(360); // 10 (the per-call minimum) × 2 languages × 18 (Google)
     spy.mockRestore();
   });
 
