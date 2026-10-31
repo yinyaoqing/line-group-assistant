@@ -532,7 +532,11 @@ export async function verifyLineIdToken(idToken: string, clientId: string | unde
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ id_token: idToken, client_id: clientId }),
   });
-  if (!res.ok) return undefined;
+  if (!res.ok) {
+    // e.g. 400 {"error":"invalid_request","error_description":"IdToken expired."}; visible in `wrangler tail`.
+    console.error("LINE ID token rejected", res.status, await res.text().catch(() => ""));
+    return undefined;
+  }
   const data = (await res.json()) as { sub?: string; name?: string };
   return data.sub ? { sub: data.sub, name: data.name } : undefined;
 }

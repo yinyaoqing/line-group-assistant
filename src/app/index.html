@@ -131,6 +131,15 @@ const switchEl = (checked, disabled, onchange) => {
 let liffReady = null;
 const initLiff = (liffId) => (liffReady ??= liff.init({ liffId }));
 
+/** Drop LIFF's stored login and sign in afresh, once per page visit so a real failure cannot loop. */
+function relogin() {
+  if (store.get("relogin") === "1") throw new Error("LINE 登入驗證失敗，請關閉後重新開啟設定頁。\nLINE sign-in failed; close and reopen the settings page.");
+  store.set("relogin", "1");
+  liff.logout();
+  liff.login({ redirectUri: location.href });
+  return new Promise(() => {});
+}
+
 async function signIn() {
   const config = await api("/api/config");
   const params = new URLSearchParams(location.search);
@@ -140,13 +149,25 @@ async function signIn() {
     if (!config.liffId) throw new Error("設定頁尚未開通（LIFF_ID 未設定）\nThe settings page is not set up yet.");
     await initLiff(config.liffId);
     if (!liff.isLoggedIn()) { liff.login({ redirectUri: location.href }); return new Promise(() => {}); }
+    // In a desktop browser LIFF keeps the last login and hands back its ID token even after it expired
+    // (about an hour). Sign in again rather than send a token LINE will reject.
+    const decoded = liff.getDecodedIDToken();
     idToken = liff.getIDToken();
+    if (!idToken || !decoded || decoded.exp * 1000 < Date.now() + 60_000) return relogin();
   }
   // LIFF restores ?link=… into the URL during init.
   const link = new URLSearchParams(location.search).get("link");
   const cached = !link && store.get("session");
   if (cached) { session = cached; return { groupId: null }; }
-  let res = await api("/api/session", { method: "POST", body: JSON.stringify({ idToken, link, devSub }) });
+  let res;
+  try {
+    res = await api("/api/session", { method: "POST", body: JSON.stringify({ idToken, link, devSub }) });
+  } catch (err) {
+    // LINE rejected a token that looked valid here (revoked, or the clock is off): sign in afresh once.
+    if (!devSub && /LINE sign-in failed/.test(err.message)) return relogin();
+    throw err;
+  }
+  store.set("relogin", "");
   // A white-label account: the admin proves it is them by typing a code in the group; keep asking until they do.
   while (res.confirm) {
     showConfirm(res.confirm.code);
