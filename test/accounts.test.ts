@@ -368,7 +368,9 @@ describe("translation instructions", () => {
     expect(claudeSystemPrompt("en", {}, "工課明仔載才閣做")).toContain("工課 = work");
     expect(claudeSystemPrompt("th", {}, "收到")).toContain("ครับ");
     expect(claudeSystemPrompt("id", {}, "收到")).not.toContain("gender");
-    expect(claudeSystemPrompt("en", { tone: "affectionate", glossary: "格柵 = joist" }, "格柵")).toMatch(/affectionate[\s\S]*格柵 = joist/);
+    expect(claudeSystemPrompt("en", { tone: "affectionate", glossary: "格柵 = joist" }, "格柵")).toMatch(/affectionate[\s\S]*use these terms exactly\): 格柵 = joist/);
+    // Into other languages a glossary gives the meaning, to be rendered with the local trade word.
+    expect(claudeSystemPrompt("id", { glossary: "格柵 = joist" }, "格柵")).toContain("the word workers normally use for that meaning in Indonesian");
   });
 });
 
@@ -383,6 +385,30 @@ describe("cleaning Claude's output", () => {
       "Trimmer beam dan joist harus diukur dulu baru dipotong, jangan langsung dipotong.",
     ].join("\n");
     expect(cleanTranslation(out, "收頭樑跟格柵都要先量好再裁，不要直接切")).toBe("Trimmer beam dan joist harus diukur dulu baru dipotong, jangan langsung dipotong.");
+  });
+
+  it("refuses a self-correction in the middle of a Thai line, but not ordinary words", () => {
+    const thai = "สุดสัปดาห์นี้จะไปแช่น้ำพุร้อนที่เจียวซีด้วยกันไหมคะ... อ๊ะ ขอโทษนะ ไม่ใช่ เอาเป็นว่า สุดสัปดาห์นี้ไปแช่น้ำพุร้อนที่เจียวซีด้วยกันไหมจ๊ะ 💕";
+    expect(() => cleanTranslation(thai, "週末要不要一起去礁溪泡湯")).toThrow(/commentary/);
+    expect(cleanTranslation("ไม่ใช่แบบนั้นนะ", "不是那樣啦")).toBe("ไม่ใช่แบบนั้นนะ"); // "not like that": a real translation
+    expect(cleanTranslation("อ๊ะ ฝนตกแล้ว", "啊，下雨了")).toBe("อ๊ะ ฝนตกแล้ว");
+  });
+
+  it("asks again with thinking off when a thinking-allowed reply argued with itself", async () => {
+    // Nothing clean to keep in the first reply, so it is asked again.
+    const replies = ["Hmm, the glossary terms are English.\nWait, I must use the word workers use:", "Balok trimmer dan joist harus diukur dulu."];
+    const bodies: Record<string, any>[] = [];
+    const f = (async (_url: unknown, init?: { body?: unknown }) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      const text = replies[bodies.length - 1]!;
+      const message = { id: "m", type: "message", role: "assistant", model: "m", content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+      return new Response(JSON.stringify(message), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const env = { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", DB: {} as D1Database, ANTHROPIC_API_KEY: "a" };
+    expect(await engines.claude!("收頭樑跟格柵要先量", "id", env, { model: "claude-haiku-5-5", think: true }, f)).toBe("Balok trimmer dan joist harus diukur dulu.");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]!.thinking).toBeUndefined();
+    expect(bodies[1]).toMatchObject({ thinking: { type: "disabled" } });
   });
 
   it("refuses to post when nothing but commentary is left", () => {

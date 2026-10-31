@@ -87,9 +87,25 @@ export const isTone = (t: unknown): t is Tone => typeof t === "string" && t in T
 /** Default Claude model for translation; groups on plans with engine choice may pick another. */
 export const DEFAULT_TRANSLATE_MODEL = "claude-haiku-5-5";
 
+/**
+ * Glossaries are written "Chinese term = English term". Into English the terms are
+ * used as given; into other languages the model hesitated between keeping the
+ * English word and translating it (and argued with itself in the output), so it
+ * is told to use that language's usual trade word. A term mapped to itself is a
+ * name and stays as it is.
+ */
+function glossaryLine(target: Target, glossary: string): string {
+  if (target === "en") return `Glossary (use these terms exactly): ${glossary}`;
+  return (
+    `Glossary, as "Chinese term = meaning in English": ${glossary}. ` +
+    `Translate each term into the word workers normally use for that meaning in ${CLAUDE_LANG[target]}; keep a term that maps to itself as it is (it is a name).`
+  );
+}
+
 /** Targets whose pronouns or particles mark the speaker's gender, so the prompt asks for neutral forms. */
 const GENDERED: Partial<Record<LangCode, string>> = {
-  th: "Do not assume the speaker's gender: unless the message shows it, leave out ครับ and ค่ะ.",
+  // The affectionate tone pulled Thai towards the female คะ; say which particle carries warmth instead.
+  th: "Do not assume the speaker's gender: unless the message or the note about the conversation shows it, leave out ครับ, ค่ะ and คะ, and use นะ for warmth.",
   vi: "Do not assume anyone's gender or age: unless the message shows it, prefer neutral pronouns such as bạn or mọi người.",
   ja: "Do not assume the speaker's gender: unless the message shows it, use neutral first-person forms.",
 };
@@ -115,7 +131,7 @@ export function claudeSystemPrompt(target: Target, opts: TranslateOptions, sourc
     GENDERED[target] ?? "",
     tone === "natural" ? "" : TONES[tone].prompt,
     opts.toneNote ? `About this conversation: ${opts.toneNote}` : "",
-    opts.glossary ? `Glossary (use these terms exactly): ${opts.glossary}` : "",
+    opts.glossary ? glossaryLine(target, opts.glossary) : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -123,6 +139,18 @@ export function claudeSystemPrompt(target: Target, opts: TranslateOptions, sourc
 
 /** Lines that are the model talking about its answer rather than the answer. */
 const COMMENTARY = /^\s*(wait\b|actually\b|hmm\b|correction\b|corrected\b|let me\b|i should\b|i need to\b|note:|translation:|revised\b)/im;
+/**
+ * A self-correction in the middle of the translation, in the target language ("…ไหมคะ… อ๊ะ ขอโทษนะ ไม่ใช่…"
+ * = "oops, sorry, no"). There is no clean answer to keep, so the translation is refused.
+ */
+// Only an "oops/sorry" followed closely by "no/wrong" counts: either word alone is an ordinary translation.
+const INLINE_CORRECTION = /(อ๊ะ|ขอโทษ)[^\n]{0,12}(ไม่ใช่|ผิด)|(à|ờ|xin lỗi),?\s*(không phải|nhầm)|(eh|maaf),?\s*(maksud(ku|nya)|bukan|salah)|\b(ralat|koreksi):|(あ|いや)、\s*違う/i;
+
+export class CommentaryError extends Error {
+  constructor() {
+    super("translation contained commentary");
+  }
+}
 const QUOTES: [string, string][] = [['"', '"'], ["“", "”"], ["「", "」"], ["『", "』"], ["'", "'"]];
 
 /**
@@ -137,8 +165,9 @@ export function cleanTranslation(out: string, source: string): string {
     const parts = text.split(/\n/).map((x) => x.trim()).filter(Boolean);
     const answers = parts.filter((x) => !COMMENTARY.test(x) && !/:\s*$/.test(x));
     text = answers.at(-1) ?? "";
-    if (!text || COMMENTARY.test(text)) throw new Error("translation contained commentary");
+    if (!text || COMMENTARY.test(text)) throw new CommentaryError();
   }
+  if (INLINE_CORRECTION.test(text) && !INLINE_CORRECTION.test(source)) throw new CommentaryError();
   for (const [open, close] of QUOTES) {
     if (text.length > 1 && text.startsWith(open) && text.endsWith(close) && !source.trim().startsWith(open)) {
       text = text.slice(open.length, -close.length).trim();
@@ -154,24 +183,34 @@ export const claude: Engine = async (text, target, env, opts, f) => {
   const model = opts.model ?? DEFAULT_TRANSLATE_MODEL;
   // Server-side refusal fallback exists for Opus, not Haiku.
   const fallback = model.startsWith("claude-opus") ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {};
-  const response = await client.beta.messages.create({
-    model,
-    // Room for a long message in a wordy language; a cut-off translation is an error, not a reply.
-    max_tokens: 4096,
-    // A chat line is a light task: low effort keeps translations fast and cheap.
-    output_config: { effort: "low" },
-    // Paid plans let Claude think when a line needs it (tone, glossary, slang). The free plan turns it off
-    // on Haiku (allowed at effort high or below) so a message costs a fixed amount. Opus 5.5 rejects
-    // disabled thinking, so it always keeps the default.
-    ...(model.startsWith("claude-haiku") && !opts.think ? { thinking: { type: "disabled" as const } } : {}),
-    ...fallback,
-    system: claudeSystemPrompt(target, opts, text),
-    messages: [{ role: "user", content: text }],
-  });
-  if (response.stop_reason === "refusal") throw new Error("Claude declined to translate this message");
-  if (response.stop_reason === "max_tokens") throw new Error("translation was cut off");
-  const out = response.content.map((b) => (b.type === "text" ? b.text : "")).join("");
-  return cleanTranslation(out, text);
+  const haiku = model.startsWith("claude-haiku");
+  const ask = async (think: boolean) => {
+    const response = await client.beta.messages.create({
+      model,
+      // Room for a long message in a wordy language; a cut-off translation is an error, not a reply.
+      max_tokens: 4096,
+      // A chat line is a light task: low effort keeps translations fast and cheap.
+      output_config: { effort: "low" },
+      // Paid plans let Claude think when a line needs it (tone, glossary, slang). The free plan turns it off
+      // on Haiku (allowed at effort high or below) so a message costs a fixed amount. Opus 5.5 rejects
+      // disabled thinking, so it always keeps the default.
+      ...(haiku && !think ? { thinking: { type: "disabled" as const } } : {}),
+      ...fallback,
+      system: claudeSystemPrompt(target, opts, text),
+      messages: [{ role: "user", content: text }],
+    });
+    if (response.stop_reason === "refusal") throw new Error("Claude declined to translate this message");
+    if (response.stop_reason === "max_tokens") throw new Error("translation was cut off");
+    return cleanTranslation(response.content.map((b) => (b.type === "text" ? b.text : "")).join(""), text);
+  };
+  try {
+    return await ask(!!opts.think);
+  } catch (err) {
+    // In measurements every self-correction came from runs allowed to think, which at low effort reason in
+    // the reply instead: ask once more with thinking off rather than post nothing.
+    if (!(err instanceof CommentaryError) || !haiku || !opts.think) throw err;
+    return await ask(false);
+  }
 };
 
 export const engines: Record<string, Engine> = { google, deepl, claude };
