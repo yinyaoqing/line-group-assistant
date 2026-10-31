@@ -213,6 +213,7 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
     model: s.model as string | undefined,
     tone: s.tone as string | undefined,
     toneNote: s.toneNote as string | undefined,
+    think: t.plan.id !== "free",
   };
 
   // Accounts (per-user plans) share one allowance across their groups, so a group's

@@ -13,6 +13,11 @@ export interface TranslateOptions {
   tone?: string;
   /** A line about the conversation, e.g. "she is my girlfriend's mother". Used by "claude". */
   toneNote?: string;
+  /**
+   * Let Claude think before answering (adaptive). Off on the free plan, where Haiku
+   * runs with thinking disabled so each message costs a fixed amount.
+   */
+  think?: boolean;
 }
 
 /** A translation, plus the source language when the engine reports it (e.g. "en", "zh-TW"). */
@@ -104,9 +109,10 @@ export const claude: Engine = async (text, target, env, opts, f) => {
     max_tokens: 4096,
     // A chat line is a light task: low effort keeps translations fast and cheap.
     output_config: { effort: "low" },
-    // Haiku may turn thinking off (at effort high or below); a chat line needs no reasoning, and this keeps
-    // the cost per message fixed. Opus 5.5 rejects disabled thinking, so it keeps the default.
-    ...(model.startsWith("claude-haiku") ? { thinking: { type: "disabled" as const } } : {}),
+    // Paid plans let Claude think when a line needs it (tone, glossary, slang). The free plan turns it off
+    // on Haiku (allowed at effort high or below) so a message costs a fixed amount. Opus 5.5 rejects
+    // disabled thinking, so it always keeps the default.
+    ...(model.startsWith("claude-haiku") && !opts.think ? { thinking: { type: "disabled" as const } } : {}),
     ...fallback,
     system: claudeSystemPrompt(target, opts),
     messages: [{ role: "user", content: text }],

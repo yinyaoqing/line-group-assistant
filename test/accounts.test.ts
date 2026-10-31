@@ -328,11 +328,26 @@ describe("Claude translation requests", () => {
   };
   const env = { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", DB: {} as D1Database, ANTHROPIC_API_KEY: "a" };
 
-  it("Haiku runs with thinking off at low effort, so a message costs a fixed amount", async () => {
+  it("Haiku runs with thinking off unless asked to think (the free plan never is)", async () => {
     const { bodies, f } = capture();
     expect(await engines.claude!("你好", "en", env, { model: "claude-haiku-5-5" }, f)).toBe("Hello");
     expect(bodies[0]).toMatchObject({ model: "claude-haiku-5-5", thinking: { type: "disabled" }, output_config: { effort: "low" } });
     expect(bodies[0]!.fallbacks).toBeUndefined();
+    await engines.claude!("你好", "en", env, { model: "claude-haiku-5-5", think: true }, f);
+    expect(bodies[1]!.thinking).toBeUndefined(); // the model's default: adaptive
+  });
+
+  it("paid plans translate with thinking on, the free plan with it off", async () => {
+    const spy = vi.spyOn(engines, "claude").mockResolvedValue("Good morning");
+    const paid = await paidWorld("starter");
+    await handleEvent(msg("大家早安", "U1", "Ca"), paid.deps);
+    expect(spy.mock.calls.at(-1)![3]).toMatchObject({ think: true });
+    const free = world();
+    const c = await free.code();
+    await handleEvent(msg(`/activate ${c.code}`), free.deps);
+    await handleEvent(msg("大家早安"), free.deps);
+    expect(spy.mock.calls.at(-1)![3]).toMatchObject({ think: false });
+    spy.mockRestore();
   });
 
   it("Opus keeps its default thinking (it rejects disabled) and the refusal fallback", async () => {
