@@ -40,7 +40,7 @@ function setup(group: Partial<GroupConfig> = {}, env: Partial<Deps["env"]> = {})
   const deps: Deps = {
     env: fullEnv,
     line,
-    channel: { id: "default", joinPolicy: "code" },
+    channel: { id: "default" },
     groups,
     admins,
     codes,

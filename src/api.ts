@@ -410,14 +410,13 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
       channels.map((c) => ({
         channelId: c.channelId,
         name: c.name,
-        joinPolicy: c.joinPolicy,
         webhookUrl: `${deps.origin}/webhook/${c.channelId}`,
       })),
     );
   }
 
   if (req.method === "POST" && path === "/api/admin/channels") {
-    const b = await body<{ channelId?: unknown; name?: unknown; secret?: unknown; token?: unknown; joinPolicy?: unknown }>();
+    const b = await body<{ channelId?: unknown; name?: unknown; secret?: unknown; token?: unknown }>();
     const id = typeof b.channelId === "string" ? b.channelId.trim().toLowerCase() : "";
     if (!/^[a-z0-9-]{3,32}$/.test(id) || id === "default") throw new HttpError(400, "代號需為 3–32 個小寫英數或 -，且不能是 default");
     if (typeof b.name !== "string" || !b.name.trim()) throw new HttpError(400, "請填名稱");
@@ -425,13 +424,11 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
     const secretIn = typeof b.secret === "string" ? b.secret.trim() : "";
     const tokenIn = typeof b.token === "string" ? b.token.trim() : "";
     if (!existing && (!secretIn || !tokenIn)) throw new HttpError(400, "新頻道需要 Channel secret 與 access token");
-    const joinPolicy = b.joinPolicy === "code" ? "code" : "open";
     await deps.channels.put({
       channelId: id,
       name: b.name.trim(),
       secretEnc: secretIn ? await encrypt(secret, secretIn) : existing!.secretEnc,
       tokenEnc: tokenIn ? await encrypt(secret, tokenIn) : existing!.tokenEnc,
-      joinPolicy,
     });
     return json({ channelId: id, webhookUrl: `${deps.origin}/webhook/${id}` });
   }

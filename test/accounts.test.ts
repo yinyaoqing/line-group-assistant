@@ -24,7 +24,7 @@ beforeEach(async () => {
   (await import("../src/plugins/tasks")).clearPendingCache();
 });
 
-function world(joinPolicy: "code" | "open" = "code") {
+function world() {
   const replies: LineMessage[][] = [];
   const pushes: LineMessage[][] = [];
   const line: LineApi = {
@@ -46,7 +46,7 @@ function world(joinPolicy: "code" | "open" = "code") {
   const deps: Deps = {
     env: { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", DB: {} as D1Database, APP_SECRET: SECRET, LIFF_ID: "123-abc", ANTHROPIC_API_KEY: "a" },
     line,
-    channel: { id: "default", joinPolicy },
+    channel: { id: "default" },
     groups: repo,
     admins,
     codes,

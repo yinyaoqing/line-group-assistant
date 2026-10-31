@@ -25,7 +25,7 @@ beforeEach(async () => {
 
 let sent = 0;
 
-function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "default", joinPolicy: "code" }) {
+function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "default" }) {
   const replies: LineMessage[][] = [];
   const line: LineApi = {
     // Like LINE, return an ID per sent message (M1, M2, …).
@@ -170,13 +170,14 @@ describe("admins and activation", () => {
     expect(await w.admins.get("Cg", "U2")).toBeUndefined();
   });
 
-  it("activates groups on join for open white-label channels", async () => {
-    const w = world([], { id: "acme", joinPolicy: "open" });
+  it("white-label channels also wait for a one-time code; joining never switches a group on", async () => {
+    const w = world([], { id: "acme" });
     await handleEvent({ type: "join", replyToken: "r", timestamp: 0, source: { type: "group", groupId: "Cnew" } }, w.deps);
-    expect(await w.repo.get("Cnew")).toMatchObject({ status: "active", channelId: "acme" });
-    expect(textOf(w.replies[0]?.[0])).toContain("第一位輸入 /activate");
+    expect(await w.repo.get("Cnew")).toMatchObject({ status: "pending", channelId: "acme" });
+    expect(textOf(w.replies[0]?.[0])).toContain("/activate <啟用碼>");
     await handleEvent(msg("/activate", "U1", "Cnew"), w.deps);
-    expect(await w.admins.get("Cnew", "U1")).toMatchObject({ role: "owner" });
+    expect(textOf(w.replies[1]?.[0])).toContain("請輸入啟用碼");
+    expect((await w.repo.get("Cnew"))?.status).toBe("pending");
   });
 
   it("marks a group as left when the bot is removed", async () => {
@@ -278,7 +279,7 @@ describe("settings API", () => {
     expect(await w.repo.get("Cg")).toMatchObject({ status: "pending", settings: { translate: { engine: "claude" } } });
     expect((await call(api, "PUT", "/api/admin/groups/Cg", { status: "gold" }, session)).status).toBe(400);
 
-    const created = await call(api, "POST", "/api/admin/channels", { channelId: "Acme", name: "Acme", secret: "sec", token: "tok", joinPolicy: "open" }, session);
+    const created = await call(api, "POST", "/api/admin/channels", { channelId: "Acme", name: "Acme", secret: "sec", token: "tok" }, session);
     expect(created.data).toEqual({ channelId: "acme", webhookUrl: "https://bot.example/webhook/acme" });
     const stored = await channels.get("acme");
     expect(stored?.secretEnc).not.toBe("sec");

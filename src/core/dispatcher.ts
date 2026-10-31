@@ -17,8 +17,6 @@ import { action, tag, tagOf, text, withQuickReply, type QuickItem, type Template
 /** The LINE official account an event came in on, and how its groups get activated. */
 export interface ChannelInfo {
   id: string;
-  /** "open": groups activate as soon as the bot joins; "code": they need a one-time `/activate <code>`. */
-  joinPolicy: "open" | "code";
 }
 
 export interface Deps {
@@ -263,11 +261,10 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
     return;
   }
 
-  // Bot just joined: register the group; open channels switch it on straight away.
+  // Bot just joined: register the group as pending; it waits for /activate <code> on every channel.
   if (event.type === "join") {
     const name = await deps.line.groupName(gid).catch(() => undefined);
     await deps.groups.register({ ...defaultGroup(gid, deps.channel.id), name });
-    if (deps.channel.joinPolicy === "open") await deps.groups.activate(gid);
   }
 
   const group = await deps.groups.get(gid);
@@ -518,7 +515,7 @@ async function runPending(group: GroupConfig, nonce: string | undefined, userId:
  * for it. Every member who activates gets an account (free unless a code
  * carries a plan); a fresh group bills to whoever activated it.
  *
- *   pending group, code channel  a one-time code is needed, unless the sender
+ *   pending group                a one-time code is needed, unless the sender
  *                                already pays (their groups bill to them)
  *   active group, no code        an admin on a paid plan takes the billing over
  *   active group, with a code    the code's plan goes to the sender's account;
@@ -556,7 +553,7 @@ async function activate(
   if (given) {
     code = await deps.codes.redeem(given, ch, gid, userId);
     if (!code) return reply("❌ 啟用碼無效、已使用或已過期\nThis code is invalid, already used or expired.");
-  } else if (deps.channel.joinPolicy === "code" && !paying) {
+  } else if (!paying) {
     return reply("請輸入啟用碼 Please add the code: /activate XXXX-XXXX-XXXX\n啟用碼請向服務提供者索取。");
   }
 

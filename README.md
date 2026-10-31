@@ -132,7 +132,7 @@ https://line-group-assistant.<你的帳號>.workers.dev/webhook
 ### 7. 新增白牌客戶
 
 1. 客戶建立自己的官方帳號與 Messaging API channel，把 Channel secret 與 access token 給你。
-2. 平台管理員在設定頁「白牌頻道」新增，取一個代號（例如 `acme`），選擇群組要「邀請即啟用」或「需要啟用碼」；需要啟用碼時，在「啟用碼」分頁選這個頻道產生，啟用碼只能用在該頻道。
+2. 平台管理員在設定頁「白牌頻道」新增，取一個代號（例如 `acme`），白牌頻道和預設頻道一樣，每個群組都要輸入一次性啟用碼才會開始運作；在「啟用碼」分頁選這個頻道產生，啟用碼只能用在該頻道。
 3. 把頁面顯示的 `https://…/webhook/acme` 填進客戶 channel 的 Webhook URL，並照第 1 步開啟群組、關閉自動回應。
 
 ## 群組設定

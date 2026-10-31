@@ -35,7 +35,7 @@ function setup(group: Partial<GroupConfig> = {}) {
   const deps: Deps = {
     env: { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", DB: {} as D1Database },
     line,
-    channel: { id: "default", joinPolicy: "code" },
+    channel: { id: "default" },
     groups,
     admins: new MemoryAdminRepo(),
     codes: new MemoryCodeRepo(),

@@ -76,7 +76,7 @@ describe("@bot in a group", () => {
     const deps: Deps = {
       env,
       line,
-      channel: { id: "default", joinPolicy: "code" },
+      channel: { id: "default" },
       groups: new MemoryGroupRepo([group]),
       admins: new MemoryAdminRepo(),
       codes: new MemoryCodeRepo(),

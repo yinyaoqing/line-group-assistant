@@ -408,7 +408,6 @@ async function adminChannels() {
     name: h("input", { type: "text", placeholder: "客戶名稱" }),
     secret: h("input", { type: "text", placeholder: "Channel secret" }),
     token: h("input", { type: "text", placeholder: "Channel access token" }),
-    joinPolicy: h("select", {}, h("option", { value: "open" }, "邀請即啟用 open"), h("option", { value: "code" }, "需要一次性啟用碼 code")),
   };
   const add = h("button", { class: "primary", onclick: async () => {
     add.disabled = true;
@@ -425,7 +424,7 @@ async function adminChannels() {
     adminTabs("channels"),
     h("div", { class: "card" }, h("h2", {}, "頻道列表"),
       channels.length ? h("div", { class: "list" }, channels.map((c) => h("div", { class: "row" },
-        h("div", {}, c.name, " ", h("span", { class: "badge" }, c.joinPolicy), h("small", {}, h("code", {}, c.webhookUrl))),
+        h("div", {}, c.name, h("small", {}, h("code", {}, c.webhookUrl))),
         h("button", { onclick: async (e) => {
           const btn = e.currentTarget;
           if (btn.dataset.armed !== "1") { btn.dataset.armed = "1"; btn.textContent = "再按一次確認刪除"; return; }
@@ -437,8 +436,7 @@ async function adminChannels() {
         h("label", { class: "field" }, "代號（網址用，小寫英數）", f.channelId),
         h("label", { class: "field" }, "名稱", f.name),
         h("label", { class: "field" }, "Channel secret（更新時可留空）", f.secret),
-        h("label", { class: "field" }, "Access token（更新時可留空）", f.token),
-        h("label", { class: "field" }, "群組啟用方式（需要啟用碼時，到「啟用碼」分頁產生）", f.joinPolicy)),
+        h("label", { class: "field" }, "Access token（更新時可留空）", f.token)),
       h("div", { style: "margin-top:12px" }, add)),
   );
 }
@@ -459,7 +457,7 @@ async function adminCodes() {
     chars: h("input", { type: "number", min: 1, value: 100000 }),
     plan: h("select", {}, h("option", { value: "free" }, "免費 Free"), h("option", { value: "starter" }, "入門 Starter"), h("option", { value: "advanced" }, "進階 Advanced")),
     planUntil: h("input", { type: "date" }),
-    channelId: h("select", {}, h("option", { value: "default" }, "預設官方帳號"), channels.filter((c) => c.joinPolicy === "code").map((c) => h("option", { value: c.channelId }, c.name))),
+    channelId: h("select", {}, h("option", { value: "default" }, "預設官方帳號"), channels.map((c) => h("option", { value: c.channelId }, c.name))),
     validDays: h("input", { type: "number", min: 0, max: 365, value: 30 }),
     count: h("input", { type: "number", min: 1, max: 20, value: 1 }),
   };

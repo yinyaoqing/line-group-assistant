@@ -120,9 +120,9 @@ describe("D1AdminRepo", () => {
 describe("D1ChannelRepo", () => {
   it("stores, updates and removes channels", async () => {
     const repo = new D1ChannelRepo(db);
-    await repo.put({ channelId: "acme", name: "Acme", secretEnc: "s1", tokenEnc: "t1", joinPolicy: "open" });
-    await repo.put({ channelId: "acme", name: "Acme 2", secretEnc: "s2", tokenEnc: "t2", joinPolicy: "code" });
-    expect(await repo.get("acme")).toEqual({ channelId: "acme", name: "Acme 2", secretEnc: "s2", tokenEnc: "t2", joinPolicy: "code" });
+    await repo.put({ channelId: "acme", name: "Acme", secretEnc: "s1", tokenEnc: "t1" });
+    await repo.put({ channelId: "acme", name: "Acme 2", secretEnc: "s2", tokenEnc: "t2" });
+    expect(await repo.get("acme")).toEqual({ channelId: "acme", name: "Acme 2", secretEnc: "s2", tokenEnc: "t2" });
     expect((await repo.list()).map((c) => c.channelId)).toEqual(["acme"]);
     await repo.remove("acme");
     expect(await repo.get("acme")).toBeUndefined();

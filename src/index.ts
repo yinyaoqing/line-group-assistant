@@ -46,7 +46,7 @@ function storageFor(env: Env) {
 async function loadChannel(env: Env, channelId: string): Promise<{ info: ChannelInfo; secret: string; token: string } | undefined> {
   if (channelId === "default") {
     return {
-      info: { id: "default", joinPolicy: "code" },
+      info: { id: "default" },
       secret: env.LINE_CHANNEL_SECRET,
       token: env.LINE_CHANNEL_ACCESS_TOKEN,
     };
@@ -55,7 +55,7 @@ async function loadChannel(env: Env, channelId: string): Promise<{ info: Channel
   const c = await new D1ChannelRepo(env.DB).get(channelId);
   if (!c) return undefined;
   return {
-    info: { id: c.channelId, joinPolicy: c.joinPolicy },
+    info: { id: c.channelId },
     secret: await decrypt(env.APP_SECRET, c.secretEnc),
     token: await decrypt(env.APP_SECRET, c.tokenEnc),
   };
