@@ -35,6 +35,8 @@ describe("interpret", () => {
     expect(params).toMatchObject({ fallbacks: "default", betas: ["server-side-fallback-2026-07-01"] });
     expect(params.tool_choice).toBeUndefined();
     expect(params.messages[0].content).toContain("/tool 線鋸 1");
+    // Every task state change must be in the prompt, or the assistant tells people the command does not exist.
+    for (const c of ["/task start", "/task done", "/task fail", "/task assign"]) expect(params.messages[0].content).toContain(c);
   });
 
   it("never lets the AI run blocked or unknown commands", async () => {
