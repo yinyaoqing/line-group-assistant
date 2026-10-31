@@ -949,3 +949,51 @@ describe("settings link hijack protection", () => {
     expect(link?.c).toBe("default");
   });
 });
+
+describe("member languages", () => {
+  const call = async (deps: ApiDeps, method: string, path: string, body?: unknown, session?: string) => {
+    const res = await handleApi(
+      new Request("https://bot.example" + path, {
+        method,
+        headers: { "Content-Type": "application/json", ...(session ? { Authorization: "Bearer " + session } : {}) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      }),
+      deps,
+    );
+    return { status: res.status, data: (await res.json()) as Record<string, any> };
+  };
+  const proGroup = () => active({ plan: "pro", settings: { translate: { engine: "google", languages: ["zh-TW", "en", "vi"] } } });
+
+  it("/lang @member sets another member's language (admins only) and /lang lists everyone", async () => {
+    const w = world([proGroup()]);
+    await w.admins.add("Cg", "U1", "owner");
+    await handleEvent(msg("/lang @JOJO vi", "U3", "Cg", ["U2"]), w.deps);
+    expect(textOf(w.replies[0]?.[0])).toContain("只有管理員");
+    await handleEvent(msg("/lang @JOJO vi", "U1", "Cg", ["U2"]), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toContain("JOJO");
+    expect(textOf(w.replies[1]?.[0])).toContain("Tiếng Việt");
+    // A name with a space: the language is still the last word.
+    await handleEvent(msg("/lang @Some one en", "U1", "Cg", ["U3"]), w.deps);
+    expect(textOf(w.replies[2]?.[0])).toContain("English");
+    await handleEvent(msg("/lang", "U1"), w.deps);
+    const list = textOf(w.replies[3]?.[0]);
+    expect(list).toContain("JOJO：🇻🇳 Tiếng Việt");
+    expect(list).toContain("Someone：🇺🇸 English");
+  });
+
+  it("the settings page lists members and lets an admin set their languages", async () => {
+    const w = world([proGroup()]);
+    await w.admins.add("Cg", "U1", "owner");
+    await handleEvent(msg("/lang vi", "U2"), w.deps);
+    const api = w.api();
+    const link = await signToken(SECRET, "link", { g: "Cg", u: "U1", n: "nonce-members", c: "default" }, 600);
+    const session = (await call(api, "POST", "/api/session", { idToken: "ok:U1", link })).data.session as string;
+    const view = await call(api, "GET", "/api/groups/Cg", undefined, session);
+    expect(view.data.members).toEqual([{ userId: "U2", name: "JOJO", lang: "vi", declared: true }]);
+    const put = await call(api, "PUT", "/api/groups/Cg/settings", { members: [{ userId: "U2", lang: "en" }, { userId: "U3", lang: "zh-TW" }] }, session);
+    expect(put.status).toBe(200);
+    expect(put.data.members.map((m: { userId: string; lang: string }) => [m.userId, m.lang])).toEqual([["U2", "en"], ["U3", "zh-TW"]]);
+    // A language the group has not chosen is refused.
+    expect((await call(api, "PUT", "/api/groups/Cg/settings", { members: [{ userId: "U2", lang: "th" }] }, session)).status).toBe(400);
+  });
+});

@@ -1,6 +1,6 @@
 import { DEFAULT_LANGUAGES, isLangCode, LANGUAGES, type LangCode } from "../../../config/languages";
 import type { PluginContext, QuickItem } from "../../core/types";
-import type { Row } from "../../storage/types";
+import type { Row, Storage } from "../../storage/types";
 
 /**
  * Which language each member uses, in the "members" table: { userId, lang,
@@ -20,12 +20,26 @@ const SEEN_WRITE_MS = 24 * 3600 * 1000;
 const CACHE_TTL_MS = 60 * 1000;
 const cache = new Map<string, { rows: Row[]; at: number }>();
 
-async function members(ctx: PluginContext): Promise<Row[]> {
-  const hit = cache.get(ctx.group.groupId);
+async function membersOf(storage: Storage, groupId: string): Promise<Row[]> {
+  const hit = cache.get(groupId);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.rows;
-  const rows = await ctx.storage.list(TABLE);
-  cache.set(ctx.group.groupId, { rows, at: Date.now() });
+  const rows = await storage.list(TABLE);
+  cache.set(groupId, { rows, at: Date.now() });
   return rows;
+}
+
+const members = (ctx: PluginContext) => membersOf(ctx.storage, ctx.group.groupId);
+
+export interface Member {
+  userId: string;
+  lang?: LangCode;
+  /** Set by /lang or the settings page, rather than detected from what they wrote. */
+  declared: boolean;
+}
+
+/** Every member with a known language: those who have written, or were set by an admin. */
+export async function listMembers(storage: Storage, groupId: string): Promise<Member[]> {
+  return (await membersOf(storage, groupId)).map((r) => ({ userId: r.userId!, lang: isLangCode(r.lang) ? r.lang : undefined, declared: r.declared === "1" }));
 }
 
 /**
@@ -76,14 +90,17 @@ export async function noteLanguage(ctx: PluginContext, userId: string, lang: Lan
   Object.assign(row, await ctx.storage.update(TABLE, row.id, { ...(changed ? { lang } : {}), seenAt }));
 }
 
-/** Set a member's language from /lang; it then wins over detection. */
-export async function declareLanguage(ctx: PluginContext, userId: string, lang: LangCode, now: number): Promise<void> {
-  const rows = await members(ctx);
+/** Set a member's language (from /lang, an admin's /lang @member, or the settings page); it then wins over detection. */
+export async function setMemberLanguage(storage: Storage, groupId: string, userId: string, lang: LangCode, now: number): Promise<void> {
+  const rows = await membersOf(storage, groupId);
   const row = rows.find((r) => r.userId === userId);
   const fields = { lang, declared: "1", seenAt: new Date(now).toISOString() };
-  if (row) Object.assign(row, await ctx.storage.update(TABLE, row.id, fields));
-  else rows.push(await ctx.storage.append(TABLE, { userId, ...fields }));
+  if (row) Object.assign(row, await storage.update(TABLE, row.id, fields));
+  else rows.push(await storage.append(TABLE, { userId, ...fields }));
 }
+
+export const declareLanguage = (ctx: PluginContext, userId: string, lang: LangCode, now: number) =>
+  setMemberLanguage(ctx.storage, ctx.group.groupId, userId, lang, now);
 
 /** "vi", "VI", "zh", "中文", "Tiếng Việt" → a language code, if it is one. */
 export function parseLang(input: string): LangCode | undefined {

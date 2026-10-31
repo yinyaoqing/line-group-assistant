@@ -1,9 +1,9 @@
 import { DEFAULT_LANGUAGES, isLangCode, LANGUAGES, type LangCode } from "../../../config/languages";
 import { engineWeight, type Plan } from "../../../config/plans";
-import type { Plugin, PluginContext } from "../../core/types";
+import type { CommandInput, Plugin, PluginContext } from "../../core/types";
 import { text, withQuickReply } from "../../core/types";
 import { detectScript } from "./detect";
-import { audience, declareLanguage, languageButtons, noteLanguage, parseLang } from "./members";
+import { audience, declareLanguage, languageButtons, listMembers, noteLanguage, parseLang } from "./members";
 import { baseLang, engines, type TranslateOptions } from "./engines";
 
 /**
@@ -35,7 +35,7 @@ export const translate: Plugin = {
   commands: ["t", "translate", "lang"],
   help: {
     title: "🌐 翻譯 Translate",
-    lines: ["直接聊天就會自動翻譯", "/translate　開／關自動翻譯", "/t 文字　只翻這一句", "/lang　選擇你的語言"],
+    lines: ["直接聊天就會自動翻譯", "/translate　開／關自動翻譯", "/t 文字　只翻這一句", "/lang　看成員語言、選擇你的語言", "/lang @阿明 @Tuấn vi　管理員替成員設定語言"],
   },
   templates: [{ label: "翻譯一句話", text: "/t 要翻譯的文字" }],
   quickReplies: [{ label: "🌐 翻譯開關 Translate", text: "/translate" }],
@@ -47,7 +47,7 @@ export const translate: Plugin = {
   },
 
   async onCommand(input, ctx) {
-    if (input.name === "lang") return langCommand(input.rest, input.userId, ctx, input.event.timestamp);
+    if (input.name === "lang") return langCommand(input, ctx);
     if (input.name !== "t") return toggle(input.args[0], ctx);
     if (!input.rest) return [text("用法 Usage: /t <要翻譯的文字 text to translate>")];
     return run(input.rest, input.userId, ctx, true);
@@ -61,16 +61,39 @@ export const translate: Plugin = {
   },
 };
 
-/** /lang shows the language buttons; /lang vi sets the sender's language. */
-async function langCommand(arg: string, userId: string | undefined, ctx: Ctx, timestamp: number) {
+/**
+ * /lang               who is set to which language, then the buttons
+ * /lang vi            set the sender's language
+ * /lang @A @B vi      admins: set other members' languages (LINE's @ supplies their IDs;
+ *                     the language is the last word, so names with spaces are fine)
+ */
+async function langCommand(input: CommandInput, ctx: Ctx) {
+  const { userId, event } = input;
   const langs = groupLanguages(ctx.settings, ctx.plan);
   const choose = () => [withQuickReply(text("🌐 請選擇你的語言 Choose your language"), languageButtons(langs))];
-  if (!arg || !userId) return choose();
-  const lang = parseLang(arg);
+  const label = (l: LangCode) => `${LANGUAGES[l].flag} ${LANGUAGES[l].name}`;
+  const name = async (u: string) => (await ctx.displayName(u)) ?? u.slice(0, 8);
+  const words = input.args.filter((w) => !/^[@＠]/.test(w));
+  if (!words.length || !userId) {
+    const known = await listMembers(ctx.storage, ctx.group.groupId);
+    if (!known.length) return choose();
+    const lines = await Promise.all(known.map(async (m) => `・${await name(m.userId)}：${m.lang ? label(m.lang) : "？"}${m.declared ? "" : "（自動 auto）"}`));
+    return [withQuickReply(text(`🌐 成員語言 Member languages\n${lines.join("\n")}\n\n點下方按鈕選你的語言 Tap yours below\n管理員替人設定 Admins: /lang @成員 vi`), languageButtons(langs))];
+  }
+  const lang = parseLang(words[words.length - 1]!);
   if (!lang || !langs.includes(lang)) return choose();
-  await declareLanguage(ctx, userId, lang, timestamp);
-  const who = (await ctx.displayName(userId)) ?? "";
-  return [text(`✅ ${who} 的語言 Language：${LANGUAGES[lang].flag} ${LANGUAGES[lang].name}`)];
+  const mentioned = (event.message?.mention?.mentionees ?? []).filter((m) => !m.isSelf && m.userId).map((m) => m.userId!);
+  if (mentioned.length) {
+    if (!(await ctx.isAdmin(userId))) return [text("🔒 只有管理員可以替別人設定語言。\nOnly admins can set other members' languages.")];
+    const names: string[] = [];
+    for (const u of mentioned) {
+      await declareLanguage(ctx, u, lang, event.timestamp);
+      names.push(await name(u));
+    }
+    return [text(`✅ ${names.join("、")} 的語言 Language：${label(lang)}`)];
+  }
+  await declareLanguage(ctx, userId, lang, event.timestamp);
+  return [text(`✅ ${await name(userId)} 的語言 Language：${label(lang)}`)];
 }
 
 type Ctx = Parameters<NonNullable<Plugin["onMessage"]>>[1];

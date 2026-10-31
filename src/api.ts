@@ -7,6 +7,7 @@ import { encrypt, verifyToken, signToken } from "./core/crypto";
 import type { LineApi } from "./core/line";
 import type { Env, GroupConfig, Plugin } from "./core/types";
 import { monthlyLimit, groupLanguages, USAGE_METRIC } from "./plugins/translate";
+import { listMembers, setMemberLanguage } from "./plugins/translate/members";
 import type { AdminRepo } from "./storage/admins";
 import type { ChannelRepo } from "./storage/channels";
 import { formatCode, type CodeRepo } from "./storage/codes";
@@ -108,7 +109,9 @@ async function route(req: Request, deps: ApiDeps): Promise<Response> {
   g = m(/^\/api\/groups\/([^/]+)\/settings$/);
   if (g && req.method === "PUT") {
     const group = await allowedGroup(g[1]!, me.sub, platformAdmin, deps);
-    const updated = await deps.groups.update(group.groupId, applySettings(group, await body<SettingsBody>(), deps.plugins));
+    const b = await body<SettingsBody>();
+    const updated = await deps.groups.update(group.groupId, applySettings(group, b, deps.plugins));
+    if (b.members !== undefined) await applyMembers(updated!, b.members, deps);
     return json(await groupView(updated!, deps));
   }
 
@@ -247,7 +250,27 @@ async function groupView(group: GroupConfig, deps: ApiDeps) {
     tones: Object.entries(TONES).map(([id, v]) => ({ id, label: v.label })),
     languages: Object.entries(LANGUAGES).map(([code, l]) => ({ code, name: l.name, flag: l.flag, allowed: plan.languages.includes(code as never) })),
     admins,
+    // Members with a known language (they wrote, or an admin set them); LINE only lists a whole group for verified accounts.
+    members: await Promise.all(
+      (await listMembers(deps.storageFor(group), group.groupId)).map(async (m) => ({
+        ...m,
+        name: (line && (await line.groupMemberName(group.groupId, m.userId).catch(() => undefined))) ?? m.userId.slice(0, 8),
+      })),
+    ),
   };
+}
+
+/** Admins may set each known member's language from the settings page; like /lang, it then wins over detection. */
+async function applyMembers(group: GroupConfig, members: unknown, deps: ApiDeps): Promise<void> {
+  if (!Array.isArray(members)) throw new HttpError(400, "members 必須是陣列 members must be an array");
+  const allowed = groupLanguages(group.settings?.translate ?? {}, groupPlan(group));
+  const storage = deps.storageFor(group);
+  for (const m of members as { userId?: unknown; lang?: unknown }[]) {
+    if (typeof m.userId !== "string" || !m.userId || !isLangCode(m.lang) || !allowed.includes(m.lang)) {
+      throw new HttpError(400, "未知的成員或語言 Unknown member or language");
+    }
+    await setMemberLanguage(storage, group.groupId, m.userId, m.lang, Date.now());
+  }
 }
 
 interface SettingsBody {
@@ -266,6 +289,8 @@ interface SettingsBody {
   tasks?: { digest?: unknown };
   /** How scheduled messages reach the group: "reply" (free, with the next event) or "push" (at once, uses quota). */
   notify?: unknown;
+  /** [{ userId, lang }]: members' languages to set (see applyMembers). */
+  members?: unknown;
 }
 
 /** What group admins may change. Engine and quota stay with platform admins. */

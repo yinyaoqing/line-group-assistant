@@ -97,6 +97,8 @@ export interface PluginContext {
     get(metric: string): Promise<number>;
     add(metric: string, amount: number): Promise<void>;
   };
+  /** Whether this member is one of the group's admins (false when unknown, e.g. on cron runs). */
+  isAdmin(userId: string | undefined): Promise<boolean>;
 }
 
 export interface MessageInput {

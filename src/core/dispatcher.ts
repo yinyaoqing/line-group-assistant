@@ -61,7 +61,7 @@ const groupIdOf = (e: LineEvent) => e.source.groupId ?? e.source.roomId;
 export const groupPlan = (group: GroupConfig) =>
   group.account ? effectivePlan(group.account.plan, group.account.planUntil) : effectivePlan(group.plan, group.planUntil);
 
-function context(deps: Pick<Deps, "env" | "usage" | "storageFor" | "outbox" | "accounts">, line: LineApi, group: GroupConfig, plugin: Plugin): PluginContext {
+function context(deps: Pick<Deps, "env" | "usage" | "storageFor" | "outbox" | "accounts"> & { admins?: AdminRepo }, line: LineApi, group: GroupConfig, plugin: Plugin): PluginContext {
   const names = new Map<string, string | undefined>();
   // Usage of a group bound to an account is metered on the account, across all its groups.
   const account = group.account;
@@ -96,6 +96,7 @@ function context(deps: Pick<Deps, "env" | "usage" | "storageFor" | "outbox" | "a
       get: (metric) => deps.usage.get(meterKey, metric),
       add: (metric, amount) => deps.usage.add(meterKey, metric, amount),
     },
+    isAdmin: async (userId) => !!(userId && deps.admins && (await deps.admins.get(group.groupId, userId))),
   };
 }
 
