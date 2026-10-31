@@ -343,7 +343,9 @@ export async function handleEvent(event: LineEvent, deps: Deps): Promise<void> {
   // Stickers, photos, non-command taps: nothing to answer, but queued messages can still go out.
   if (!input) return sendQ([]);
   if (viaButton && !pre) return sendQ([]); // buttons only ever stand for commands
-  // A tapped Confirm (or any button) settles whatever the assistant was waiting on.
+  // The Confirm button is single-use: it names the pending request, not the command, so a second tap does nothing.
+  if (pre?.name === "ok") return sendQ(await runPending(group, pre.args[0], userId, event, deps));
+  // Any other button tap settles whatever the assistant was waiting on for this member.
   if (viaButton && userId) await takePending(deps.storageFor(group), userId, event.timestamp).catch(() => undefined);
 
   const mentionees = event.message?.mention?.mentionees ?? [];
@@ -448,7 +450,7 @@ async function assistantReply(
     if (isReadOnly(decision.command)) return { run: decision.command, messages: [] };
     // Anything that changes data waits for a tap, or a "要"/"yes" within CONFIRM_WINDOW_MS,
     // so a misread request is never applied silently.
-    if (userId) await rememberPending(deps.storageFor(group), userId, decision.command, now);
+    const nonce = userId ? await rememberPending(deps.storageFor(group), userId, decision.command, now) : "";
     return {
       messages: [
         {
@@ -457,7 +459,7 @@ async function assistantReply(
           template: {
             type: "buttons",
             text: `🤖 ${decision.reply}\n${decision.command}`.slice(0, 160),
-            actions: [action({ label: "✓ 執行 Confirm", text: decision.command })],
+            actions: [action({ label: "✓ 執行 Confirm", text: nonce ? `/ok ${nonce}` : decision.command })],
           },
         },
       ],
@@ -479,19 +481,37 @@ export const CONFIRM_WINDOW_MS = 10 * 60 * 1000;
 const YES = /^(要|是|是的|好|好的|好啊|對|可以|確認|執行|沒錯|ok|okay|yes|y|đúng|vâng|ừ|ya|iya|ใช่|oo|opo|はい)[!！。.~～]*$/i;
 const NO = /^(不要|不用|不是|不對|取消|算了|no|n|nope|không|tidak|ไม่|hindi|いいえ)[!！。.~～]*$/i;
 
-async function rememberPending(storage: Storage, userId: string, command: string, now: number): Promise<void> {
+/** Park the command and return the nonce the Confirm button carries. */
+async function rememberPending(storage: Storage, userId: string, command: string, now: number): Promise<string> {
   const row = (await storage.list(CONFIRM_TABLE)).find((r) => r.userId === userId);
-  const fields = { command, until: new Date(now + CONFIRM_WINDOW_MS).toISOString() };
+  const nonce = randomId(6);
+  const fields = { command, nonce, until: new Date(now + CONFIRM_WINDOW_MS).toISOString() };
   if (row) await storage.update(CONFIRM_TABLE, row.id, fields);
   else await storage.append(CONFIRM_TABLE, { userId, ...fields });
+  return nonce;
 }
 
 /** The member's pending command if it has not expired; either way it is cleared, so an answer counts once. */
 async function takePending(storage: Storage, userId: string, now: number): Promise<string | undefined> {
   const row = (await storage.list(CONFIRM_TABLE)).find((r) => r.userId === userId);
   if (!row?.command) return undefined;
-  await storage.update(CONFIRM_TABLE, row.id, { command: "", until: "" });
+  await storage.update(CONFIRM_TABLE, row.id, { command: "", nonce: "", until: "" });
   return new Date(row.until ?? 0).getTime() >= now ? row.command : undefined;
+}
+
+/**
+ * "/ok <nonce>" from the Confirm button: run the request it stands for, once,
+ * and only for the member who made it (the row is theirs).
+ */
+async function runPending(group: GroupConfig, nonce: string | undefined, userId: string | undefined, event: LineEvent, deps: Deps): Promise<LineMessage[]> {
+  const storage = deps.storageFor(group);
+  const row = nonce ? (await storage.list(CONFIRM_TABLE)).find((r) => r.nonce === nonce && r.command) : undefined;
+  if (!row) return [text("ℹ️ 這個確認已經執行過或過期了。Already done, or expired.")];
+  if (!row.userId || row.userId !== userId) return [text("🔒 請由提出要求的人按確認。Only the member who asked can confirm.")];
+  const command = await takePending(storage, row.userId, event.timestamp);
+  if (!command) return [text("ℹ️ 這個確認已經過期了，請再說一次。Expired; please ask again.")];
+  await handleEvent({ ...event, type: "message", postback: undefined, message: { type: "text", id: event.message?.id ?? `ok-${nonce}`, text: command } }, deps);
+  return [];
 }
 
 /**

@@ -107,12 +107,26 @@ describe("@bot in a group", () => {
     const card = w.replies[0]?.[0] as { type: string; template: { text: string; actions: { type: string; data: string }[] } };
     expect(card.type).toBe("template");
     expect(card.template.text).toContain("Thêm 2 線鋸?");
-    expect(card.template.actions[0]).toMatchObject({ type: "postback", data: "/tool 線鋸 2" });
+    // The button carries a single-use handle, never the command itself.
+    expect(card.template.actions[0]).toMatchObject({ type: "postback", data: expect.stringMatching(/^\/ok \S+$/) });
     expect(await w.storage.list("tools")).toEqual([]);
     expect(await w.usage.get("Cg", "ai_requests")).toBe(1);
 
-    await handleEvent({ type: "postback", replyToken: "r2", timestamp: 0, source: { type: "group", groupId: "Cg", userId: "U2" }, postback: { data: "/tool 線鋸 2" } }, w.deps);
+    const tap = (userId: string, data = card.template.actions[0]!.data): LineEvent =>
+      ({ type: "postback", replyToken: "r2", timestamp: 0, source: { type: "group", groupId: "Cg", userId }, postback: { data } });
+    // Someone else cannot confirm it.
+    await handleEvent(tap("U9"), w.deps);
+    expect(textOf(w.replies[1]?.[0])).toContain("提出要求的人");
+    expect(await w.storage.list("tools")).toEqual([]);
+    await handleEvent(tap("U2"), w.deps);
     expect((await w.storage.list("tools"))[0]).toMatchObject({ name: "線鋸", qty: "2" });
+    // A second tap (LINE lets you tap the old card again) does not run it twice.
+    await handleEvent(tap("U2"), w.deps);
+    expect((await w.storage.list("tools"))[0]).toMatchObject({ qty: "2" });
+    expect(textOf(w.replies[w.replies.length - 1]?.[0])).toContain("已經執行過");
+    // Nor does a made-up handle.
+    await handleEvent(tap("U2", "/ok nope"), w.deps);
+    expect((await w.storage.list("tools"))[0]).toMatchObject({ qty: "2" });
   });
 
   it("runs read-only commands straight away", async () => {
