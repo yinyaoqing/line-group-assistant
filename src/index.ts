@@ -6,6 +6,7 @@ import { LineClient, verifySignature, type LineApi } from "./core/line";
 import type { Env, GroupConfig, LineEvent } from "./core/types";
 import { plugins } from "./plugins";
 import { handleReport } from "./report";
+import { privacyHtml, termsHtml } from "./legal";
 import { siteHtml } from "./site";
 import { D1AccountRepo } from "./storage/accounts";
 import { D1AdminRepo } from "./storage/admins";
@@ -104,6 +105,9 @@ export default {
     if (req.method === "GET" && path === "/health") return new Response("ok");
     if (req.method === "GET" && path === "/") {
       return new Response(siteHtml(url.origin), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300" } });
+    }
+    if (req.method === "GET" && (path === "/privacy" || path === "/terms")) {
+      return new Response(path === "/privacy" ? privacyHtml() : termsHtml(), { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300" } });
     }
     if (req.method === "GET" && (path === "/app" || path === "/app/")) {
       return new Response(appHtml, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });

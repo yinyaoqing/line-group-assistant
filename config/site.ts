@@ -10,6 +10,8 @@ export const SITE = {
   lineId: "@021eubwk",
   /** Shown as the white-label price. */
   enterprisePrice: "專案報價",
+  /** Shown on /privacy and /terms next to the LINE account; leave empty to show LINE only. */
+  contactEmail: "",
 };
 
 export const addFriendUrl = (lineId: string) => `https://line.me/R/ti/p/${encodeURIComponent(lineId)}`;

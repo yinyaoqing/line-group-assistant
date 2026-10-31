@@ -275,7 +275,7 @@ export function siteHtml(origin: string): string {
       <details><summary>群組成員需要另外安裝或註冊什麼嗎？</summary><p>不需要。大家照常在 LINE 群組聊天，只有管理員需要在 LINE 裡開設定頁。</p></details>
       <details><summary>翻譯額度用完會怎樣？</summary><p>自動翻譯會暫停並在群組提示一次，任務、工具材料照常可用；下個月 1 日（台北時間）自動恢復，也可以隨時升級專業版。</p></details>
       <details><summary>不想每句都翻譯可以嗎？</summary><p>可以。輸入 <code>/translate off</code> 關閉自動翻譯，需要時再用 <code>/t 文字</code> 只翻那一句；也可以在設定頁改成「只翻 /t」。</p></details>
-      <details><summary>聊天內容會被保存嗎？</summary><p>翻譯時訊息會送到翻譯服務，但我們不保存聊天原文；只保存任務、工具材料、報表等你們主動建立的資料。建議開始前先告知群組成員。</p></details>
+      <details><summary>聊天內容會被保存嗎？</summary><p>翻譯時每則訊息會送到群組選用的翻譯服務（Google、DeepL 或 Anthropic Claude），我們不保存訊息原文或譯文。會保存的是你們主動建立的任務、完成回報、工具材料數量，以及每位成員的語言偏好和群組設定。詳見<a href="/privacy">隱私權政策</a>；建議開始前先告知群組成員。</p></details>
       <details><summary>電腦版 LINE 可以用嗎？</summary><p>可以。電腦版看不到輸入框上方的快速按鈕，輸入 <code>/menu</code> 會出現一張功能選單卡片，按鈕一樣能點。</p></details>
       <details><summary>一個帳號可以用在幾個群組？</summary><p>方案以群組計算，每個群組各用一組啟用碼開通。多個群組或公司導入，歡迎聯絡我們規劃企業方案。</p></details>
     </div>
@@ -293,7 +293,7 @@ export function siteHtml(origin: string): string {
 <footer>
   <div class="wrap">
     <span>© ${new Date().getUTCFullYear()} ${name}・${esc(SITE.tagline)}</span>
-    <span>洽詢：LINE ${esc(SITE.lineId)}</span>
+    <span>洽詢：LINE ${esc(SITE.lineId)}　<a href="/privacy">隱私權政策</a>　<a href="/terms">服務條款</a></span>
   </div>
 </footer>
 </body>
