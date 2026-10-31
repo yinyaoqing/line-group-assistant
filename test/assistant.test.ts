@@ -26,13 +26,14 @@ const env = { LINE_CHANNEL_SECRET: "s", LINE_CHANNEL_ACCESS_TOKEN: "t", DB: {} a
 const input = (request: string) => ({ request, speaker: "Tuấn", plugins: [plugins.tasks!, plugins.tools!], openTasks: [], counts: [], today: "2026-10-16" });
 
 describe("interpret", () => {
-  it("asks Claude for a JSON decision with low effort and the default fallback", async () => {
+  it("asks Claude Haiku for a JSON decision with low effort (Haiku has no server-side fallback)", async () => {
     const { client, create } = fakeClient({ kind: "command", command: "/tool 線鋸 2", reply: "Thêm 2 線鋸?" });
     expect(await assistant.realInterpret(env, input("thêm 2 cái 線鋸"), client)).toEqual({ kind: "command", command: "/tool 線鋸 2", reply: "Thêm 2 線鋸?" });
     const params = (create.mock.calls[0] as unknown[])[0] as Record<string, any>;
-    expect(params.model).toBe("claude-opus-5-5");
+    expect(params.model).toBe("claude-haiku-5-5");
     expect(params.output_config).toMatchObject({ effort: "low", format: { type: "json_schema" } });
-    expect(params).toMatchObject({ fallbacks: "default", betas: ["server-side-fallback-2026-07-01"] });
+    expect(params.fallbacks).toBeUndefined();
+    expect(params.betas).toBeUndefined();
     expect(params.tool_choice).toBeUndefined();
     expect(params.messages[0].content).toContain("/tool 線鋸 1");
     // Every task state change must be in the prompt, or the assistant tells people the command does not exist.
@@ -95,10 +96,10 @@ describe("@bot in a group", () => {
   });
   const textOf = (m: LineMessage | undefined) => (m as { text: string }).text;
 
-  it("is a Pro feature", async () => {
+  it("is a paid-plan feature", async () => {
     const w = world("free");
     await handleEvent(mention("thêm 2 cái 線鋸"), w.deps);
-    expect(textOf(w.replies[0]?.[0])).toContain("專業版功能");
+    expect(textOf(w.replies[0]?.[0])).toContain("付費方案功能");
     expect(interpret).not.toHaveBeenCalled();
   });
 

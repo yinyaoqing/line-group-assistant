@@ -13,7 +13,8 @@ export const defaultGroup = (groupId: string, channelId = "default"): GroupConfi
   storage: { type: "d1" },
   settings: {
     translate: {
-      engine: "google", // "google" | "deepl" | "claude"
+      engine: "claude", // Claude Haiku: the cheapest per character, and it can follow a tone; "google" | "deepl" cost ~18× the allowance
+      model: "claude-haiku-5-5",
       trigger: "all", // "all": every message; "command": only /t
       showName: true,
       languages: ["zh-TW", "en"], // see config/languages.ts; the plan limits which are usable

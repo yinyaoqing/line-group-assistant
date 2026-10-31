@@ -100,7 +100,8 @@ export const claude: Engine = async (text, target, env, opts, f) => {
   const fallback = model.startsWith("claude-opus") ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {};
   const response = await client.beta.messages.create({
     model,
-    max_tokens: 1024,
+    // Room for a long message in a wordy language; a cut-off translation is an error, not a reply.
+    max_tokens: 4096,
     // A chat line is a light task: low effort keeps translations fast and cheap.
     output_config: { effort: "low" },
     ...fallback,
@@ -108,6 +109,7 @@ export const claude: Engine = async (text, target, env, opts, f) => {
     messages: [{ role: "user", content: text }],
   });
   if (response.stop_reason === "refusal") throw new Error("Claude declined to translate this message");
+  if (response.stop_reason === "max_tokens") throw new Error("translation was cut off");
   return response.content
     .map((b) => (b.type === "text" ? b.text : ""))
     .join("")

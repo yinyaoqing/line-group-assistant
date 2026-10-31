@@ -9,6 +9,7 @@ import type { GroupConfig, LineEvent, LineMessage } from "../src/core/types";
 import { plugins } from "../src/plugins";
 import { detectScript } from "../src/plugins/translate/detect";
 import { engines } from "../src/plugins/translate/engines";
+import { MemoryAccountRepo } from "../src/storage/accounts";
 import { MemoryAdminRepo } from "../src/storage/admins";
 import { MemoryChannelRepo } from "../src/storage/channels";
 import { MemoryCodeRepo } from "../src/storage/codes";
@@ -41,6 +42,7 @@ function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "def
   const usage = new MemoryUsageMeter();
   const storage = new MemoryStorage();
   // A one-time code "CODE-123" that the activation tests use.
+  const accounts = new MemoryAccountRepo();
   const codes = new MemoryCodeRepo();
   codes.codes.push({ code: "CODE123", label: "test", channelId: "default", plan: "free" });
   const deps: Deps = {
@@ -51,6 +53,7 @@ function world(groups: GroupConfig[] = [], channel: Deps["channel"] = { id: "def
     admins,
     codes,
     usage,
+    accounts,
     plugins,
     storageFor: () => storage,
     origin: "https://bot.example",
@@ -108,7 +111,7 @@ describe("multi-language translation", () => {
     await handleEvent(msg("大家早安"), w.deps);
     expect(spy.mock.calls.map((c) => c[1]).sort()).toEqual(["en", "vi"]);
     expect(textOf(w.replies[0]?.[0])).toBe("🌐 Joseph\n🇺🇸 [en]\n🇻🇳 [vi]");
-    expect(await w.usage.get("Cg", "translate_chars")).toBe(8); // 4 chars × 2 calls
+    expect(await w.usage.get("Cg", "translate_chars")).toBe(144); // 4 chars × 2 calls × 18 (Google costs 18× Haiku)
     spy.mockRestore();
   });
 
@@ -132,9 +135,9 @@ describe("multi-language translation", () => {
 
 describe("plans", () => {
   it("fall back to free after the paid-until day, in Taipei time", () => {
-    expect(effectivePlan("pro", "2026-10-31", new Date("2026-10-31T15:00:00Z")).id).toBe("pro"); // 23:00 Taipei
-    expect(effectivePlan("pro", "2026-10-31", new Date("2026-10-31T16:30:00Z")).id).toBe("free"); // Nov 1 Taipei
-    expect(effectivePlan("pro", undefined).id).toBe("pro");
+    expect(effectivePlan("advanced", "2026-10-31", new Date("2026-10-31T15:00:00Z")).id).toBe("advanced"); // 23:00 Taipei
+    expect(effectivePlan("advanced", "2026-10-31", new Date("2026-10-31T16:30:00Z")).id).toBe("free"); // Nov 1 Taipei
+    expect(effectivePlan("advanced", undefined).id).toBe("advanced");
     expect(effectivePlan("bogus", undefined)).toBe(PLANS.free);
   });
 });
@@ -162,7 +165,7 @@ describe("admins and activation", () => {
     const w = world([active()]);
     await handleEvent(msg("/activate code123"), w.deps);
     expect(await w.admins.get("Cg", "U1")).toMatchObject({ role: "owner" });
-    await handleEvent(msg("/activate code123", "U2"), w.deps);
+    await handleEvent(msg("/activate", "U2"), w.deps);
     expect(textOf(w.replies[1]?.[0])).toContain("已啟用");
     expect(await w.admins.get("Cg", "U2")).toBeUndefined();
   });
@@ -270,9 +273,10 @@ describe("settings API", () => {
     const api = w.api({ channels });
     const session = (await call(api, "POST", "/api/session", { idToken: "ok:boss" })).data.session as string;
 
-    expect((await call(api, "PUT", "/api/admin/groups/Cg", { plan: "pro", planUntil: "2099-12-31", monthlyChars: 1000 }, session)).status).toBe(200);
-    expect(await w.repo.get("Cg")).toMatchObject({ plan: "pro", planUntil: "2099-12-31", settings: { translate: { monthlyChars: 1000 } } });
-    expect((await call(api, "PUT", "/api/admin/groups/Cg", { plan: "gold" }, session)).status).toBe(400);
+    // Plans live on accounts now; the group page sets status, engine and which account pays.
+    expect((await call(api, "PUT", "/api/admin/groups/Cg", { status: "pending", engine: "claude" }, session)).status).toBe(200);
+    expect(await w.repo.get("Cg")).toMatchObject({ status: "pending", settings: { translate: { engine: "claude" } } });
+    expect((await call(api, "PUT", "/api/admin/groups/Cg", { status: "gold" }, session)).status).toBe(400);
 
     const created = await call(api, "POST", "/api/admin/channels", { channelId: "Acme", name: "Acme", secret: "sec", token: "tok", joinPolicy: "open" }, session);
     expect(created.data).toEqual({ channelId: "acme", webhookUrl: "https://bot.example/webhook/acme" });
@@ -463,7 +467,7 @@ describe("translated tasks and items", () => {
     const { tasksCsv, buildReport } = await import("../src/report");
     const csv = tasksCsv(await buildReport((await w.repo.get("Cg"))!, w.deps.storageFor(active())));
     expect(csv).toContain("買早餐,Buy breakfast / Mua bữa sáng,");
-    expect(await w.usage.get("Cg", "translate_chars")).toBe(6); // 3 chars × 2 languages
+    expect(await w.usage.get("Cg", "translate_chars")).toBe(108); // 3 chars × 2 languages × 18 (Google)
     spy.mockRestore();
   });
 
@@ -640,8 +644,9 @@ describe("one-time activation codes", () => {
     const pro = await w.codes.create({ label: "王師傅", channelId: "default", plan: "pro", planUntil: "2099-12-31" });
     await handleEvent(join("Ca"), w.deps);
     await handleEvent(msg(`/activate ${pro.code.slice(0, 4)}-${pro.code.slice(4, 8)}-${pro.code.slice(8)}`, "U1", "Ca"), w.deps);
-    expect(textOf(w.replies[1]?.[0])).toContain("💎 方案 Plan：專業版 Pro（到 2099-12-31）");
-    expect(await w.repo.get("Ca")).toMatchObject({ status: "active", plan: "pro", planUntil: "2099-12-31" });
+    // An old "pro" code opens an Advanced account for whoever redeems it, and the group bills to it.
+    expect(textOf(w.replies[1]?.[0])).toContain("💎 你的方案 Your plan：進階 Advanced（到 2099-12-31）");
+    expect(await w.repo.get("Ca")).toMatchObject({ status: "active", accountId: "default:U1" });
     expect(await w.admins.get("Ca", "U1")).toMatchObject({ role: "owner" });
 
     await handleEvent(join("Cb"), w.deps);
@@ -700,7 +705,8 @@ describe("product site", () => {
     const { siteHtml } = await import("../src/site");
     const { PLANS } = await import("../config/plans");
     const html = siteHtml("https://bot.example");
-    expect(html).toContain(`NT$${PLANS.pro.price} <small>／群組／月</small>`);
+    expect(html).toContain(`NT$${PLANS.starter.price} <small>／人／月</small>`);
+    expect(html).toContain(`NT$${PLANS.advanced.price} <small>／人／月</small>`);
     expect(html).toContain(`每月翻譯 ${PLANS.free.monthlyChars.toLocaleString("en-US")} 字`);
     expect(html).toContain("https://line.me/R/ti/p/" + encodeURIComponent(SITE.lineId));
     expect(html).toContain('<meta property="og:url" content="https://bot.example/">');
@@ -858,7 +864,7 @@ describe("free delivery of scheduled messages", () => {
     expect(outbox.queued.get("Cg")).toHaveLength(2);
   });
 
-  it("pushes at once when the group chose push", async () => {
+  it("never pushes, even for a group that chose push before it was removed", async () => {
     const { MemoryOutboxRepo } = await import("../src/storage/outbox");
     const { handleSchedule } = await import("../src/core/dispatcher");
     const w = world([active({ plan: "pro", plugins: ["tasks"], settings: { tasks: { digest: true }, core: { notify: "push" } } })]);
@@ -867,7 +873,7 @@ describe("free delivery of scheduled messages", () => {
     w.deps.line.push = async (_to, m) => void pushed.push(m);
     await handleEvent(msg("/add 買螺絲"), w.deps);
     await handleSchedule("0 0 * * 1", w.deps, async () => w.deps.line);
-    expect(pushed).toHaveLength(1);
+    expect(pushed).toHaveLength(0);
   });
 });
 

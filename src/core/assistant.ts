@@ -8,10 +8,13 @@ import type { Row } from "../storage/types";
  * then runs through the normal dispatcher, so the AI never touches data itself.
  */
 
-/** Default model; override with the AI_MODEL variable (e.g. "claude-haiku-5-5" to cut cost). */
-export const DEFAULT_AI_MODEL = "claude-opus-5-5";
+/**
+ * Default model: mapping a request onto one command is light work, and Haiku is
+ * ~40× cheaper than Opus per token. Override with the AI_MODEL variable.
+ */
+export const DEFAULT_AI_MODEL = "claude-haiku-5-5";
 
-/** Monthly AI requests per group are metered under this name. */
+/** Monthly AI requests per account (or legacy group) are metered under this name; plans cap them. */
 export const AI_METRIC = "ai_requests";
 
 export type Decision = { kind: "command"; command: string; reply: string } | { kind: "answer"; reply: string };
@@ -86,14 +89,15 @@ export async function interpret(env: Env, input: AssistantInput, client?: Anthro
     .filter(Boolean)
     .join("\n\n");
 
+  const model = env.AI_MODEL || DEFAULT_AI_MODEL;
+  // Server-side refusal fallback exists for Opus and Sonnet, not Haiku.
+  const fallback = model.startsWith("claude-haiku") ? {} : { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const };
   const response = await api.beta.messages.create({
-    model: env.AI_MODEL || DEFAULT_AI_MODEL,
+    model,
     max_tokens: 2000,
     // A routing decision, not deep reasoning: low effort keeps it fast and cheap.
     output_config: { effort: "low", format: { type: "json_schema", schema: SCHEMA } },
-    // If a safety classifier declines, the API retries on its recommended fallback model.
-    betas: ["server-side-fallback-2026-07-01"],
-    fallbacks: "default",
+    ...fallback,
     system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
     messages: [{ role: "user", content: context }],
   });

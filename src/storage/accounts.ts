@@ -1,7 +1,10 @@
+import { mergeGrant } from "../../config/plans";
+
 /**
- * Per-user subscriptions (the Duo plan): one account per LINE member per
- * channel. Groups bound to it take its plan and bill translation to it: the
- * monthly allowance first, then top-up characters (bonus), which never expire.
+ * Accounts: one per LINE member per channel, created (on the free plan) when
+ * they first activate a group. Every group is bound to an account, takes its
+ * plan and bills usage to it: the monthly allowance first, then top-up
+ * characters (bonus), which never expire.
  */
 export interface Account {
   accountId: string;
@@ -20,7 +23,9 @@ export const accountUsageKey = (accountId: string) => `acct:${accountId}`;
 
 export interface AccountRepo {
   get(accountId: string): Promise<Account | undefined>;
-  /** Create the account, or extend an existing one's plan and end date. */
+  /** The member's account, created on the free plan if they have none. */
+  ensure(channelId: string, userId: string): Promise<Account>;
+  /** Redeem a plan: create the account or upgrade/renew it (never downgrades or shortens, see mergeGrant). */
   grant(channelId: string, userId: string, plan: string, planUntil?: string): Promise<Account>;
   /** Add (or, negative, remove) top-up characters; the balance never goes below zero. */
   addBonus(accountId: string, chars: number): Promise<Account | undefined>;
@@ -56,14 +61,24 @@ export class D1AccountRepo implements AccountRepo {
     return r ? fromRecord(r) : undefined;
   }
 
+  async ensure(channelId: string, userId: string) {
+    const id = accountIdOf(channelId, userId);
+    await this.db
+      .prepare("INSERT INTO accounts (account_id, channel_id, user_id, plan) VALUES (?, ?, ?, 'free') ON CONFLICT (account_id) DO NOTHING")
+      .bind(id, channelId, userId)
+      .run();
+    return (await this.get(id))!;
+  }
+
   async grant(channelId: string, userId: string, plan: string, planUntil?: string) {
     const id = accountIdOf(channelId, userId);
+    const next = mergeGrant(await this.get(id), plan, planUntil);
     await this.db
       .prepare(
         `INSERT INTO accounts (account_id, channel_id, user_id, plan, plan_until) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (account_id) DO UPDATE SET plan = excluded.plan, plan_until = excluded.plan_until`,
       )
-      .bind(id, channelId, userId, plan, planUntil ?? null)
+      .bind(id, channelId, userId, next.plan, next.planUntil ?? null)
       .run();
     return (await this.get(id))!;
   }
@@ -92,13 +107,19 @@ export class MemoryAccountRepo implements AccountRepo {
     return this.accounts.find((a) => a.accountId === accountId);
   }
 
-  async grant(channelId: string, userId: string, plan: string, planUntil?: string) {
+  async ensure(channelId: string, userId: string) {
     const id = accountIdOf(channelId, userId);
     const existing = await this.get(id);
-    if (existing) return Object.assign(existing, { plan, planUntil });
-    const a: Account = { accountId: id, channelId, userId, plan, planUntil, bonusChars: 0 };
+    if (existing) return existing;
+    const a: Account = { accountId: id, channelId, userId, plan: "free", bonusChars: 0 };
     this.accounts.push(a);
     return a;
+  }
+
+  async grant(channelId: string, userId: string, plan: string, planUntil?: string) {
+    const a = await this.ensure(channelId, userId);
+    const next = mergeGrant(a, plan, planUntil);
+    return Object.assign(a, { plan: next.plan, planUntil: next.planUntil });
   }
 
   async addBonus(accountId: string, chars: number) {

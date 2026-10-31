@@ -1,5 +1,5 @@
 import { defaultGroup } from "../../config/defaults";
-import { effectivePlan, PLANS, TOP_UP, type PlanId } from "../../config/plans";
+import { effectivePlan, PLAN_RANK, TOP_UP } from "../../config/plans";
 import { monthlyLimit, USAGE_METRIC } from "../plugins/translate";
 import { accountIdOf, accountUsageKey, type AccountRepo } from "../storage/accounts";
 import type { AdminRepo } from "../storage/admins";
@@ -43,20 +43,14 @@ export interface Deps {
 /** LINE accepts at most this many messages per reply. */
 const MAX_REPLY_MESSAGES = 5;
 
-/**
- * How a group gets scheduled messages: "reply" (default) waits for the next
- * event and rides on its free reply; "push" sends at once, using LINE quota.
- */
-export const notifyMode = (group: GroupConfig): "reply" | "push" => (group.settings?.core?.notify === "push" ? "push" : "reply");
-
 /** How long a /settings link stays valid. */
 export const LINK_TTL_SECONDS = 10 * 60;
 
 const groupIdOf = (e: LineEvent) => e.source.groupId ?? e.source.roomId;
 
 /**
- * The plan in force for a group: its account's (per-user plans like Duo) when it
- * is bound to one, else its own.
+ * The plan in force for a group: its account's. Groups from before accounts
+ * (not yet bound to one) fall back to their own legacy plan.
  */
 export const groupPlan = (group: GroupConfig) =>
   group.account ? effectivePlan(group.account.plan, group.account.planUntil) : effectivePlan(group.plan, group.planUntil);
@@ -91,7 +85,8 @@ function context(deps: Pick<Deps, "env" | "usage" | "storageFor" | "outbox" | "a
       return names.get(userId);
     },
     push: (messages) =>
-      deps.outbox && notifyMode(group) === "reply" ? deps.outbox.add(group.groupId, messages) : line.push(group.groupId, messages),
+      // Scheduled sends always wait for the next free reply; the official account's push quota is shared by every group.
+      deps.outbox ? deps.outbox.add(group.groupId, messages) : line.push(group.groupId, messages),
     usage: {
       get: (metric) => deps.usage.get(meterKey, metric),
       add: (metric, amount) => deps.usage.add(meterKey, metric, amount),
@@ -435,9 +430,13 @@ async function assistantReply(
 ): Promise<{ run?: string; messages: LineMessage[] }> {
   const say = (msg: string) => ({ messages: [text(msg)] });
   if (!groupPlan(group).ai) {
-    return say("🤖 用說的操作（AI 助理）是專業版功能。\nAI requests are a Pro feature. 輸入 /menu 用按鈕操作。");
+    return say("🤖 用說的操作（AI 助理）是付費方案功能。\nAI requests need a paid plan. 輸入 /menu 用按鈕操作。");
   }
   if (!deps.env.ANTHROPIC_API_KEY) return say("⚠️ AI 助理尚未開通（缺少 ANTHROPIC_API_KEY）。");
+  const cap = groupPlan(group).aiRequests;
+  if (cap && (await context(deps, deps.line, group, { name: "assistant" }).usage.get(AI_METRIC)) >= cap) {
+    return say(`🤖 本月 AI 助理 ${cap} 次已用完，下個月 1 日恢復；可以先用 /menu 按鈕操作。\nThis month's ${cap} assistant requests are used up.`);
+  }
   if (!request) return say("🤖 有什麼需要幫忙？例如：「@我 新增任務 明天買螺絲 給阿明」\nHow can I help? e.g. \"@me add a task: buy screws tomorrow\"");
 
   const ctx = context(deps, deps.line, group, { name: "assistant" });
@@ -515,8 +514,16 @@ async function runPending(group: GroupConfig, nonce: string | undefined, userId:
 }
 
 /**
- * /activate [code]: switch the group on (checking the channel's code when it
- * needs one), and make the sender the owner if the group has no admins yet.
+ * /activate [code]: switch the group on and bind it to an account, which pays
+ * for it. Every member who activates gets an account (free unless a code
+ * carries a plan); a fresh group bills to whoever activated it.
+ *
+ *   pending group, code channel  a one-time code is needed, unless the sender
+ *                                already pays (their groups bill to them)
+ *   active group, no code        an admin on a paid plan takes the billing over
+ *   active group, with a code    the code's plan goes to the sender's account;
+ *                                an admin's group moves to it unless that would
+ *                                drop it to a lower plan
  */
 async function activate(
   gid: string,
@@ -526,53 +533,52 @@ async function activate(
   deps: Deps,
   reply: (msg: string) => Promise<void>,
 ): Promise<void> {
+  const ch = deps.channel.id;
   const admins = await deps.admins.list(gid);
-  // A member with a per-user plan (Duo) brings groups under their account without a code.
-  const own = userId && deps.accounts ? await deps.accounts.get(accountIdOf(deps.channel.id, userId)) : undefined;
+  const accounts = deps.accounts;
+  const own = userId && accounts ? await accounts.get(accountIdOf(ch, userId)) : undefined;
   const ownPlan = own ? effectivePlan(own.plan, own.planUntil) : undefined;
-  const account = ownPlan?.perUser ? own : undefined;
+  const paying = own && ownPlan && ownPlan.id !== "free" ? own : undefined;
+  const isActive = group?.status === "active" && admins.length > 0;
+  const isAdmin = admins.some((a) => a.lineUserId === userId);
+  const current = group?.accountId && accounts ? await accounts.get(group.accountId) : undefined;
+  const currentPlan = current ? effectivePlan(current.plan, current.planUntil) : undefined;
 
-  if (group?.status === "active" && admins.length) {
-    const isAdmin = admins.some((a) => a.lineUserId === userId);
-    if (account && !given && isAdmin && group.accountId !== account.accountId) {
-      await deps.groups.update(gid, { accountId: account.accountId });
-      return reply(`🔗 已把這個群組綁定到你的${ownPlan!.name}帳號，翻譯用量會算在你的額度。\nThis group now uses your ${ownPlan!.name} allowance. /usage 查看用量`);
+  if (isActive && !given) {
+    if (paying && isAdmin && group!.accountId !== paying.accountId) {
+      await deps.groups.update(gid, { accountId: paying.accountId });
+      return reply(`🔗 這個群組的用量改算在你的${ownPlan!.name}帳號（和你其他群組合計）。\nThis group now bills to your ${ownPlan!.name} account. /usage 查看用量`);
     }
-    return reply("✅ 此群組已啟用 Already active. 輸入 /help 查看指令");
+    return reply(`✅ 此群組已啟用 Already active${currentPlan ? `（${currentPlan.name}）` : ""}。輸入 /help 查看指令`);
   }
 
-  // Otherwise code channels need a one-time code; it is used up here, whether it
-  // activates the group or claims an already-active group that has no admin yet.
   let code: ActivationCode | undefined;
-  if (!(account && !given) && deps.channel.joinPolicy === "code") {
-    if (!given) return reply("請輸入啟用碼 Please add the code: /activate XXXX-XXXX-XXXX\n啟用碼請向服務提供者索取。");
-    code = await deps.codes.redeem(given, deps.channel.id, gid, userId);
+  if (given) {
+    code = await deps.codes.redeem(given, ch, gid, userId);
     if (!code) return reply("❌ 啟用碼無效、已使用或已過期\nThis code is invalid, already used or expired.");
+  } else if (deps.channel.joinPolicy === "code" && !paying) {
+    return reply("請輸入啟用碼 Please add the code: /activate XXXX-XXXX-XXXX\n啟用碼請向服務提供者索取。");
   }
 
-  if (!group) await deps.groups.register(defaultGroup(gid, deps.channel.id)); // joined before registration existed
-  await deps.groups.activate(gid);
-  // A code for a per-user plan opens (or renews) the redeemer's account and binds the
-  // group to it; a code for a group plan sets that plan on the group.
-  const codePlan = code ? PLANS[code.plan as PlanId] : undefined;
-  let billedTo = account;
-  if (code && codePlan?.perUser && userId && deps.accounts) {
-    billedTo = await deps.accounts.grant(deps.channel.id, userId, code.plan, code.planUntil);
-  } else if (code && code.plan !== "free") {
-    await deps.groups.update(gid, { plan: code.plan, planUntil: code.planUntil ?? "" });
-  }
-  if (billedTo) await deps.groups.update(gid, { accountId: billedTo.accountId });
+  if (!group) await deps.groups.register(defaultGroup(gid, ch)); // joined before registration existed
+  if (!isActive) await deps.groups.activate(gid);
+  const account =
+    userId && accounts ? (code && code.plan !== "free" ? await accounts.grant(ch, userId, code.plan, code.planUntil) : await accounts.ensure(ch, userId)) : undefined;
+  const plan = account ? effectivePlan(account.plan, account.planUntil) : undefined;
+  const owner = !!userId && !admins.length;
+  const moves =
+    !!account &&
+    group?.accountId !== account.accountId &&
+    (!isActive || !group?.accountId || ((isAdmin || owner) && PLAN_RANK[plan!.id] >= PLAN_RANK[currentPlan?.id ?? "free"]));
+  if (moves) await deps.groups.update(gid, { accountId: account!.accountId });
+  if (owner) await deps.admins.add(gid, userId!, "owner");
   const active = await deps.groups.get(gid);
-  const owner = userId && !admins.length;
-  if (owner) await deps.admins.add(gid, userId, "owner");
-  const plan = billedTo ? effectivePlan(billedTo.plan, billedTo.planUntil) : active && effectivePlan(active.plan, active.planUntil);
-  const until = billedTo ? billedTo.planUntil : active?.planUntil;
   return reply(
     [
-      group?.status === "active" ? "✅ 群組已啟用 Active" : "🎉 已啟用 Activated！",
+      isActive ? "✅ 群組已啟用 Active" : "🎉 已啟用 Activated！",
       code ? "🔑 啟用碼已使用，無法再次使用。 This code is now used up." : "",
-      plan && plan.id !== "free" ? `💎 方案 Plan：${plan.name}${until ? `（到 ${until}）` : ""}` : "",
-      billedTo ? "🔗 翻譯用量算在你的帳號；其他群組把我拉進去後，輸入 /activate 就能開通，不用再輸入啟用碼。" : "",
+      plan ? `💎 你的方案 Your plan：${plan.name}${plan.id !== "free" && account!.planUntil ? `（到 ${account!.planUntil}）` : ""}` : "",
+      moves ? "🔗 這個群組的用量算在你的帳號，和你其他群組合計；別的群組把我拉進去後，你輸入 /activate 也會算在一起。" : "",
       `功能 Plugins: ${active?.plugins.join(", ")}`,
       owner ? "👑 你是這個群組的管理員，輸入 /settings 開啟設定頁。\nYou are this group's admin; send /settings to open the settings page." : "",
       "輸入 /help 查看指令 Send /help to see commands.",
@@ -597,7 +603,12 @@ async function usageText(group: GroupConfig, deps: Deps): Promise<string> {
     limit ? `已用 Used：${fmt(used)} / ${fmt(limit)} 字（${pct}%）` : `已用 Used：${fmt(used)} 字（不限 unlimited）`,
     account ? `加購剩餘 Top-up left：${fmt(account.bonusChars)} 字` : "",
     account ? "（你綁定的所有群組合計 All your groups combined）" : "",
-    account && limit && used >= limit ? `💡 額度用完時會自動扣加購字數；加購：/topup 加購碼（${fmt(TOP_UP.chars)} 字 NT$${TOP_UP.price}）` : "",
+    plan.aiRequests ? `AI 助理 Assistant：${fmt(await deps.usage.get(account ? accountUsageKey(account.accountId) : group.groupId, AI_METRIC))} / ${fmt(plan.aiRequests)} 次` : "",
+    limit && used >= limit
+      ? plan.topUp
+        ? `💡 額度用完時會自動扣加購字數；加購：/topup 加購碼（${fmt(TOP_UP.chars)} 字 NT$${TOP_UP.price}）`
+        : "💡 額度用完了，下個月 1 日恢復；需要更多請升級。"
+      : "",
   ]
     .filter(Boolean)
     .join("\n");
@@ -608,8 +619,8 @@ async function topUp(group: GroupConfig, given: string | undefined, userId: stri
   if (!deps.accounts) return "⚠️ 加購功能尚未開通。";
   if (!given) return "用法 Usage: /topup 加購碼\n例 e.g. /topup ABCD-EFGH-JKLM";
   const account = userId ? await deps.accounts.get(accountIdOf(deps.channel.id, userId)) : undefined;
-  // Check first, so a code is not used up on someone without an account to credit.
-  if (!account) return "加購碼只能加到雙人版帳號，請先用雙人版啟用碼開通。\nTop-ups apply to Duo accounts; activate one first.";
+  // Check first, so a code is not used up on an account that cannot take it.
+  if (!account || !effectivePlan(account.plan, account.planUntil).topUp) return "加購只適用於進階版帳號。\nTop-ups are for Advanced accounts.";
   const code = await deps.codes.redeem(given, deps.channel.id, group.groupId, userId, new Date(), "topup");
   if (!code) return "❌ 加購碼無效、已使用或已過期\nThis code is invalid, already used or expired.";
   const updated = await deps.accounts.addBonus(account.accountId, code.chars ?? 0);

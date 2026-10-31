@@ -15,8 +15,8 @@ const asMessages = (chars: number) => `約 ${fmt(Math.round(chars / 25 / 100) * 
 
 export function siteHtml(origin: string): string {
   const free = PLANS.free;
-  const pro = PLANS.pro;
-  const duo = PLANS.duo;
+  const starter = PLANS.starter;
+  const advanced = PLANS.advanced;
   const join = addFriendUrl(SITE.lineId);
   const name = esc(SITE.name);
   const langList = (codes: string[]) => codes.map((c) => LANGUAGES[c as keyof typeof LANGUAGES]).map((l) => `${l.flag} ${esc(l.name)}`).join("　");
@@ -195,7 +195,7 @@ export function siteHtml(origin: string): string {
       <h2>三步驟開始使用</h2>
       <p class="sub">五分鐘內，群組就會開始翻譯。</p>
       <div class="steps">
-        <div class="step"><h3>加入 LINE 好友</h3><p>加 <code>${esc(SITE.lineId)}</code> 為好友，告訴我們你的團隊，取得一組啟用碼。</p></div>
+        <div class="step"><h3>加入 LINE 好友</h3><p>加 <code>${esc(SITE.lineId)}</code> 為好友，告訴我們你的團隊，取得一組啟用碼（付費方案也是用啟用碼開通）。</p></div>
         <div class="step"><h3>拉進你的群組</h3><p>把${name}邀請進原本的工作群組，不用另外建新群組。</p></div>
         <div class="step"><h3>輸入啟用碼</h3><p>在群組輸入 <code>/activate 啟用碼</code>，輸入的人就是管理員，馬上開始使用。</p></div>
       </div>
@@ -205,51 +205,49 @@ export function siteHtml(origin: string): string {
   <section class="alt" id="pricing">
     <div class="wrap">
       <h2>訂閱方案</h2>
-      <p class="sub">工作群組以群組計價；跟另一半、家人聊天選雙人版，以人計價、群組不限。</p>
+      <p class="sub">以人計價：你一個人訂閱，拉進幾個群組都可以，所有群組合計用量。</p>
       <div class="plans">
         <div class="plan">
           <h3>免費</h3>
-          <div class="price">NT$0 <small>／群組／月</small></div>
-          <p class="for">小團隊、中英文溝通</p>
+          <div class="price">NT$0 <small>／人／月</small></div>
+          <p class="for">先試試看、中英文溝通</p>
           <ul>
-            ${check(`每月翻譯 ${fmt(free.monthlyChars)} 字（${asMessages(free.monthlyChars)}）`)}
+            ${check(`每月翻譯 ${fmt(free.monthlyChars)} 字（所有群組合計，${asMessages(free.monthlyChars)}）`)}
+            ${check("群組數量不限")}
             ${check(`${free.languages.length} 種語言：${langList(free.languages)}`)}
-            ${check("任務、完成回報、工具材料數量")}
+            ${check("任務、完成回報、工具材料數量、節日提醒")}
             ${check("報表匯出 CSV／PDF")}
-            ${check("每週一推播進度摘要", free.digest)}
             ${check("越南文、印尼文、泰文等東南亞語言", false)}
-            ${check("AI 助理：@機器人用說的就能操作", free.ai)}
+            ${check("AI 助理：@機器人用說的就能操作", false)}
           </ul>
           <a class="btn ghost" href="${join}">免費開始</a>
         </div>
         <div class="plan featured">
-          <h3>專業版</h3>
-          <div class="price">NT$${fmt(pro.price)} <small>／群組／月</small></div>
-          <p class="for">有外籍同事的工地、工廠</p>
+          <h3>入門</h3>
+          <div class="price">NT$${fmt(starter.price)} <small>／人／月</small></div>
+          <p class="for">一個工班、一個家庭</p>
           <ul>
-            ${check(`每月翻譯 ${fmt(pro.monthlyChars)} 字（${asMessages(pro.monthlyChars)}）`)}
-            ${check(`全部 ${pro.languages.length} 種語言`)}
-            ${check("任務、完成回報、工具材料數量")}
-            ${check("報表匯出 CSV／PDF")}
-            ${check("每週一推播進度摘要", pro.digest)}
-            ${check("AI 助理：@機器人用說的就能操作，任何語言都可以", pro.ai)}
-            ${check("專有名詞詞彙表（Claude 引擎）")}
+            ${check(`每月翻譯 ${fmt(starter.monthlyChars)} 字（所有群組合計）`)}
+            ${check("群組數量不限")}
+            ${check(`全部 ${starter.languages.length} 種語言`)}
+            ${check("AI 翻譯，可選語氣：自然、禮貌、輕鬆、親暱")}
+            ${check(`AI 助理：@機器人用說的就能操作，每月 ${fmt(starter.aiRequests)} 次`)}
+            ${check("每週一進度摘要、專有名詞詞彙表")}
           </ul>
-          <a class="btn" href="${join}">升級專業版</a>
+          <a class="btn" href="${join}">開通入門版</a>
         </div>
         <div class="plan">
-          <h3>雙人版</h3>
-          <div class="price">NT${fmt(duo.price)} <small>／人／月</small></div>
-          <p class="for">跨國情侶、家人、朋友聊天</p>
+          <h3>進階</h3>
+          <div class="price">NT$${fmt(advanced.price)} <small>／人／月</small></div>
+          <p class="for">同時管好幾個工地、工廠</p>
           <ul>
-            ${check("綁定你一個人，拉進幾個群組都可以")}
-            ${check(`每月翻譯 ${fmt(duo.monthlyChars)} 字（所有群組合計）`)}
-            ${check(`全部 ${duo.languages.length} 種語言`)}
-            ${check("AI 翻譯，可選語氣：自然、禮貌、輕鬆、親暱")}
-            ${check("填一句對話說明，例如「對方是長輩」，翻得更貼切")}
-            ${check(`用完可加購：${fmt(TOP_UP.chars)} 字 NT${TOP_UP.price}`)}
+            ${check(`每月翻譯 ${fmt(advanced.monthlyChars)} 字（所有群組合計）`)}
+            ${check("群組數量不限")}
+            ${check("入門版的所有功能")}
+            ${check(`AI 助理每月 ${fmt(advanced.aiRequests)} 次`)}
+            ${check(`用完可加購：${fmt(TOP_UP.chars)} 字 NT$${TOP_UP.price}，不會過期`)}
           </ul>
-          <a class="btn ghost" href="${join}">開通雙人版</a>
+          <a class="btn ghost" href="${join}">開通進階版</a>
         </div>
         <div class="plan">
           <h3>企業白牌</h3>
@@ -257,14 +255,14 @@ export function siteHtml(origin: string): string {
           <p class="for">想用自己品牌與官方帳號的公司</p>
           <ul>
             ${check("使用貴公司自己的 LINE 官方帳號與名稱")}
-            ${check("群組數量、翻譯額度依需求規劃")}
+            ${check("公司帳號統一付費，員工離職群組不受影響")}
             ${check("專屬啟用碼，控管哪些群組能使用")}
             ${check("專屬詞彙表與功能客製")}
           </ul>
           <a class="btn ghost" href="${join}">聯絡我們</a>
         </div>
       </div>
-      <p class="note">付款方式為轉帳，收款後由我們為群組開通方案。</p>
+      <p class="note">付款方式為轉帳，收款後由我們為你的帳號開通方案。翻譯以 Claude Haiku 計算；選用 Claude Opus 時每字以 15 字計。</p>
     </div>
   </section>
 
@@ -273,11 +271,11 @@ export function siteHtml(origin: string): string {
       <h2>常見問題</h2>
       <p class="sub">還有其他問題？加 LINE 好友直接問我們。</p>
       <details><summary>群組成員需要另外安裝或註冊什麼嗎？</summary><p>不需要。大家照常在 LINE 群組聊天，只有管理員需要在 LINE 裡開設定頁。</p></details>
-      <details><summary>翻譯額度用完會怎樣？</summary><p>自動翻譯會暫停並在群組提示一次，任務、工具材料照常可用；下個月 1 日（台北時間）自動恢復，也可以隨時升級專業版。</p></details>
+      <details><summary>翻譯額度用完會怎樣？</summary><p>自動翻譯會暫停並在群組提示一次，任務、工具材料照常可用；下個月 1 日（台北時間）自動恢復，也可以隨時升級。</p></details>
       <details><summary>不想每句都翻譯可以嗎？</summary><p>可以。輸入 <code>/translate off</code> 關閉自動翻譯，需要時再用 <code>/t 文字</code> 只翻那一句；也可以在設定頁改成「只翻 /t」。</p></details>
       <details><summary>聊天內容會被保存嗎？</summary><p>翻譯時每則訊息會送到群組選用的翻譯服務（Google、DeepL 或 Anthropic Claude），我們不保存訊息原文或譯文。會保存的是你們主動建立的任務、完成回報、工具材料數量，以及每位成員的語言偏好和群組設定。詳見<a href="/privacy">隱私權政策</a>；建議開始前先告知群組成員。</p></details>
       <details><summary>電腦版 LINE 可以用嗎？</summary><p>可以。電腦版看不到輸入框上方的快速按鈕，輸入 <code>/menu</code> 會出現一張功能選單卡片，按鈕一樣能點。</p></details>
-      <details><summary>一個帳號可以用在幾個群組？</summary><p>方案以群組計算，每個群組各用一組啟用碼開通。多個群組或公司導入，歡迎聯絡我們規劃企業方案。</p></details>
+      <details><summary>一個帳號可以用在幾個群組？</summary><p>不限。方案綁在你這個人身上，你在哪個群組輸入 <code>/activate</code>，那個群組的用量就算在你的帳號，所有群組合計。群組裡如果有另一位付費的管理員想改由他付，他在群組輸入 <code>/activate</code> 即可。</p></details>
     </div>
   </section>
 

@@ -1,5 +1,5 @@
 import { isLangCode, LANGUAGES } from "../config/languages";
-import { effectivePlan, ENGINE_CHOICES, PLANS, TOP_UP, UPGRADE_NOTE, type PlanId } from "../config/plans";
+import { DEFAULT_ENGINE, effectivePlan, ENGINE_CHOICES, planIdOf, PLANS, TOP_UP, UPGRADE_NOTE } from "../config/plans";
 import { groupPlan, LINK_TTL_SECONDS } from "./core/dispatcher";
 import { isTone, TONES } from "./plugins/translate/engines";
 import { accountUsageKey, type Account, type AccountRepo } from "./storage/accounts";
@@ -195,12 +195,12 @@ async function accountView(a: Account, deps: ApiDeps) {
   return {
     accountId: a.accountId,
     plan: plan.name,
-    planId: a.plan,
+    planId: planIdOf(a.plan),
     planUntil: a.planUntil,
     used: await deps.usage.get(accountUsageKey(a.accountId), USAGE_METRIC),
     limit: plan.monthlyChars,
     bonusChars: a.bonusChars,
-    topUp: TOP_UP,
+    topUp: plan.topUp ? TOP_UP : null,
   };
 }
 
@@ -234,15 +234,14 @@ async function groupView(group: GroupConfig, deps: ApiDeps) {
       showName: t.showName !== false,
       minLength: Number(t.minLength ?? 2),
       glossary: typeof t.glossary === "string" ? t.glossary : "",
-      engine: t.engine ?? "google",
+      engine: t.engine ?? DEFAULT_ENGINE.engine,
       // The engine as one choice id: "google", or the Claude model.
-      engineChoice: (t.engine ?? "google") === "claude" ? String(t.model ?? "claude-haiku-5-5") : String(t.engine ?? "google"),
+      engineChoice: (t.engine ?? DEFAULT_ENGINE.engine) === "claude" ? String(t.model ?? DEFAULT_ENGINE.model) : String(t.engine),
       tone: isTone(t.tone) ? t.tone : "natural",
       toneNote: typeof t.toneNote === "string" ? t.toneNote : "",
       monthlyChars: typeof t.monthlyChars === "number" ? t.monthlyChars : null,
     },
     tasks: { digest: group.settings?.tasks?.digest === true },
-    notify: group.settings?.core?.notify === "push" ? "push" : "reply",
     usage: group.account
       ? { translateChars: await deps.usage.get(accountUsageKey(group.account.accountId), USAGE_METRIC), limit: plan.monthlyChars }
       : { translateChars: await deps.usage.get(group.groupId, USAGE_METRIC), limit: monthlyLimit(t, plan) },
@@ -287,8 +286,6 @@ interface SettingsBody {
     toneNote?: unknown;
   };
   tasks?: { digest?: unknown };
-  /** How scheduled messages reach the group: "reply" (free, with the next event) or "push" (at once, uses quota). */
-  notify?: unknown;
   /** [{ userId, lang }]: members' languages to set (see applyMembers). */
   members?: unknown;
 }
@@ -325,7 +322,7 @@ export function applySettings(group: GroupConfig, b: SettingsBody, plugins: Reco
   if (bt?.engineChoice !== undefined) {
     const choice = ENGINE_CHOICES.find((e) => e.id === bt.engineChoice);
     if (!choice) throw new HttpError(400, "未知的翻譯引擎 Unknown engine");
-    if (!plan.engineChoice) throw new HttpError(403, "選擇翻譯引擎需要專業版或雙人版 Engine choice needs Pro or Duo");
+    if (!plan.engineChoice) throw new HttpError(403, "選擇翻譯引擎需要付費方案 Engine choice needs a paid plan");
     t.engine = choice.engine;
     if (choice.model) t.model = choice.model;
     else delete t.model;
@@ -347,12 +344,8 @@ export function applySettings(group: GroupConfig, b: SettingsBody, plugins: Reco
     if (typeof bt.glossary !== "string" || bt.glossary.length > 2000) throw new HttpError(400, "詞彙表最多 2000 字");
     t.glossary = bt.glossary.trim();
   }
-  if (b.notify !== undefined) {
-    if (b.notify !== "reply" && b.notify !== "push") throw new HttpError(400, "notify 只能是 reply 或 push");
-    settings.core = { ...(settings.core ?? {}), notify: b.notify };
-  }
   if (b.tasks?.digest !== undefined) {
-    if (b.tasks.digest === true && !plan.digest) throw new HttpError(403, "每週摘要需要專業版 Weekly digest needs Pro");
+    if (b.tasks.digest === true && !plan.digest) throw new HttpError(403, "每週摘要需要付費方案 Weekly digest needs a paid plan");
     settings.tasks = { ...(settings.tasks ?? {}), digest: b.tasks.digest === true };
   }
   return patch;
@@ -365,19 +358,23 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
     const all = await deps.groups.listAll();
     return json(
       await Promise.all(
-        all.map(async (g) => ({
-          groupId: g.groupId,
-          name: g.name,
-          status: g.status,
-          channelId: g.channelId,
-          planId: g.plan ?? "free",
-          planUntil: g.planUntil,
-          effectivePlan: effectivePlan(g.plan, g.planUntil).id,
-          engine: g.settings?.translate?.engine ?? "google",
-          monthlyChars: typeof g.settings?.translate?.monthlyChars === "number" ? g.settings.translate.monthlyChars : null,
-          translateChars: await deps.usage.get(g.groupId, USAGE_METRIC),
-          limit: monthlyLimit(g.settings?.translate ?? {}, effectivePlan(g.plan, g.planUntil)),
-        })),
+        all.map(async (g) => {
+          if (g.accountId && deps.accounts) g.account = await deps.accounts.get(g.accountId);
+          const plan = groupPlan(g);
+          const key = g.account ? accountUsageKey(g.account.accountId) : g.groupId;
+          return {
+            groupId: g.groupId,
+            name: g.name,
+            status: g.status,
+            channelId: g.channelId,
+            accountId: g.accountId ?? "",
+            effectivePlan: plan.id,
+            planUntil: g.account?.planUntil ?? g.planUntil,
+            engine: g.settings?.translate?.engine ?? DEFAULT_ENGINE.engine,
+            translateChars: await deps.usage.get(key, USAGE_METRIC),
+            limit: g.account ? plan.monthlyChars : monthlyLimit(g.settings?.translate ?? {}, plan),
+          };
+        }),
       ),
     );
   }
@@ -386,33 +383,22 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
   if (m && req.method === "PUT") {
     const group = await deps.groups.get(m[1]!);
     if (!group) throw new HttpError(404, "找不到群組 Group not found");
-    const b = await body<{ plan?: unknown; planUntil?: unknown; status?: unknown; engine?: unknown; monthlyChars?: unknown }>();
+    const b = await body<{ accountId?: unknown; status?: unknown; engine?: unknown }>();
     const patch: Parameters<GroupRepo["update"]>[1] = {};
-    if (b.plan !== undefined) {
-      if (!(typeof b.plan === "string" && b.plan in PLANS)) throw new HttpError(400, "未知的方案 Unknown plan");
-      patch.plan = b.plan as PlanId;
-    }
-    if (b.planUntil !== undefined) {
-      if (b.planUntil !== "" && !(typeof b.planUntil === "string" && /^\d{4}-\d{2}-\d{2}$/.test(b.planUntil))) throw new HttpError(400, "日期格式 YYYY-MM-DD");
-      patch.planUntil = (b.planUntil as string) || "";
+    // Plans live on accounts; here the group moves to another account (e.g. the foreman left) or is unbound.
+    if (b.accountId !== undefined) {
+      if (b.accountId === "") patch.accountId = "";
+      else if (typeof b.accountId === "string" && deps.accounts && (await deps.accounts.get(b.accountId))) patch.accountId = b.accountId;
+      else throw new HttpError(400, "找不到這個帳號 Unknown account");
     }
     if (b.status !== undefined) {
       if (b.status !== "active" && b.status !== "pending") throw new HttpError(400, "status 只能是 active 或 pending");
       patch.status = b.status;
     }
-    if (b.engine !== undefined || b.monthlyChars !== undefined) {
+    if (b.engine !== undefined) {
+      if (b.engine !== "google" && b.engine !== "deepl" && b.engine !== "claude") throw new HttpError(400, "未知的翻譯引擎");
       const settings = structuredClone(group.settings ?? {});
-      const t = (settings.translate ??= {});
-      if (b.engine !== undefined) {
-        if (b.engine !== "google" && b.engine !== "deepl" && b.engine !== "claude") throw new HttpError(400, "未知的翻譯引擎");
-        t.engine = b.engine;
-      }
-      if (b.monthlyChars === null || b.monthlyChars === "") delete t.monthlyChars;
-      else if (b.monthlyChars !== undefined) {
-        const n = Number(b.monthlyChars);
-        if (!Number.isInteger(n) || n < 0) throw new HttpError(400, "額度需為 0 以上的整數");
-        t.monthlyChars = n;
-      }
+      (settings.translate ??= {}).engine = b.engine;
       patch.settings = settings;
     }
     return json(await deps.groups.update(group.groupId, patch));
@@ -515,6 +501,7 @@ async function adminRoute(req: Request, path: string, body: <T>() => Promise<T>,
     const plan = typeof b.plan === "string" && b.plan in PLANS ? b.plan : "free";
     const planUntil = typeof b.planUntil === "string" && b.planUntil ? b.planUntil : undefined;
     if (planUntil && !/^\d{4}-\d{2}-\d{2}$/.test(planUntil)) throw new HttpError(400, "方案到期日格式 YYYY-MM-DD");
+    if (kind === "activate" && plan !== "free" && !planUntil) throw new HttpError(400, "付費方案的啟用碼需要到期日 A paid plan needs an end date");
     const days = b.validDays === undefined || b.validDays === "" ? 30 : Number(b.validDays);
     if (!Number.isInteger(days) || days < 0 || days > 365) throw new HttpError(400, "有效天數需為 0–365（0 = 不過期）");
     const count = b.count === undefined ? 1 : Number(b.count);

@@ -1,5 +1,5 @@
 import { DEFAULT_LANGUAGES, isLangCode, LANGUAGES, type LangCode } from "../../../config/languages";
-import { engineWeight, type Plan } from "../../../config/plans";
+import { DEFAULT_ENGINE, engineWeight, type Plan } from "../../../config/plans";
 import type { CommandInput, Plugin, PluginContext } from "../../core/types";
 import { text, withQuickReply } from "../../core/types";
 import { detectScript } from "./detect";
@@ -8,7 +8,7 @@ import { baseLang, engines, type TranslateOptions } from "./engines";
 
 /**
  * Settings (group.settings.translate):
- *   engine:    "google" | "deepl" | "claude"   (default "google")
+ *   engine:    "claude" (default, model claude-haiku-5-5) | "google" | "deepl"
  *   languages: codes to translate between, e.g. ["zh-TW", "en", "vi"] (default zh-TW ↔ en);
  *              each message is translated into all the others, limited by the plan
  *   trigger:   "all"  – translate every text message (default)
@@ -206,7 +206,7 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
   let targets = langs.filter((l) => l !== from && (!only || only.includes(l)) && (!t.audience || t.audience.includes(l)));
   if (!targets.length) return { from, outs: [] };
 
-  const engine = engines[String(s.engine ?? "google")];
+  const engine = engines[String(s.engine ?? DEFAULT_ENGINE.engine)];
   if (!engine) throw new Error(`unknown translate engine: ${String(s.engine)}`);
   const opts: TranslateOptions = {
     glossary: s.glossary as string | undefined,
@@ -219,7 +219,13 @@ export async function translateCore(source: string, t: TranslateCtx, only?: Lang
   // own override does not apply; past the allowance, top-up characters are spent.
   const limit = t.bonus ? t.plan.monthlyChars : monthlyLimit(s, t.plan);
   const usedBefore = await t.usage.get(USAGE_METRIC);
-  if (limit > 0 && usedBefore >= limit && !(t.bonus && (await t.bonus.get()) > 0)) throw new QuotaExceeded();
+  if (limit > 0) {
+    // Check what this message will cost before calling any engine, so the last few
+    // characters of an allowance cannot pay for a long message in seven languages.
+    const estimate = Math.ceil(source.length * targets.length * engineWeight(s));
+    const left = Math.max(0, limit - usedBefore) + (t.bonus ? await t.bonus.get() : 0);
+    if (estimate > left) throw new QuotaExceeded();
+  }
 
   let calls = 0; // every engine call is billed for the full text
   const call = async (target: LangCode) => {

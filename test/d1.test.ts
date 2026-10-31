@@ -15,6 +15,7 @@ import v4 from "../migrations/0004_activation_codes.sql?raw";
 import v5 from "../migrations/0005_outbox.sql?raw";
 import v6 from "../migrations/0006_accounts.sql?raw";
 import v7 from "../migrations/0007_pending_binds.sql?raw";
+import v8 from "../migrations/0008_per_person_plans.sql?raw";
 
 // Runs the real SQL against a local, in-memory D1 (workerd via wrangler).
 let proxy: PlatformProxy<{ DB: D1Database }>;
@@ -23,7 +24,7 @@ let db: D1Database;
 beforeAll(async () => {
   proxy = await getPlatformProxy<{ DB: D1Database }>({ persist: false });
   db = proxy.env.DB;
-  const sql = [init, v2, v3, v4, v5, v6, v7].join(";\n").replace(/--.*$/gm, "");
+  const sql = [init, v2, v3, v4, v5, v6, v7, v8].join(";\n").replace(/--.*$/gm, "");
   const statements = sql.split(";").map((s: string) => s.trim()).filter(Boolean);
   await db.batch(statements.map((s: string) => db.prepare(s)));
 }, 60_000);
@@ -162,15 +163,42 @@ describe("D1OutboxRepo", () => {
   });
 });
 
+describe("migration 0008: per-person plans", () => {
+  it("binds unbound groups to their owner's account, carries a Pro plan over, renames Duo, and moves Google groups to Haiku", async () => {
+    const run = (sql: string) => db.batch(sql.replace(/--.*$/gm, "").split(";").map((x: string) => x.trim()).filter(Boolean).map((x: string) => db.prepare(x)));
+    await db.batch([
+      db.prepare("INSERT INTO groups (group_id, status, plugins, settings, storage, channel_id, plan, plan_until) VALUES ('Cm1','active','[]',?, '{}','default','pro','2027-01-31')")
+        .bind(JSON.stringify({ translate: { engine: "google" }, core: { notify: "push" } })),
+      db.prepare("INSERT INTO groups (group_id, status, plugins, settings, storage, channel_id, plan) VALUES ('Cm2','active','[]','{}','{}','default','free')"),
+      db.prepare("INSERT INTO groups (group_id, status, plugins, settings, storage, channel_id, plan) VALUES ('Cm3','pending','[]','{}','{}','default','free')"),
+      db.prepare("INSERT INTO admins (group_id, line_user_id, role) VALUES ('Cm1','Um1','owner'), ('Cm2','Um2','owner')"),
+      db.prepare("INSERT INTO accounts (account_id, channel_id, user_id, plan, plan_until) VALUES ('default:Um2','default','Um2','duo','2027-02-28')"),
+    ]);
+    await run(v8);
+    const accounts = new D1AccountRepo(db);
+    expect(await accounts.get("default:Um1")).toMatchObject({ plan: "advanced", planUntil: "2027-01-31" });
+    expect(await accounts.get("default:Um2")).toMatchObject({ plan: "starter", planUntil: "2027-02-28" });
+    const groups = new D1GroupRepo(db);
+    const g1 = await groups.get("Cm1");
+    expect(g1).toMatchObject({ accountId: "default:Um1", settings: { translate: { engine: "claude", model: "claude-haiku-5-5" } } });
+    expect(g1?.settings?.core?.notify).toBeUndefined();
+    expect((await groups.get("Cm2"))?.accountId).toBe("default:Um2");
+    expect((await groups.get("Cm3"))?.accountId).toBeUndefined(); // no owner yet: bound on its first /activate
+  });
+});
+
 describe("D1AccountRepo", () => {
   it("grants, renews, tops up (never below zero) and binds groups", async () => {
     const repo = new D1AccountRepo(db);
-    const a = await repo.grant("default", "U1", "duo", "2099-12-31");
-    expect(a).toMatchObject({ accountId: "default:U1", plan: "duo", planUntil: "2099-12-31", bonusChars: 0 });
-    expect((await repo.grant("default", "U1", "duo", "2100-01-31")).planUntil).toBe("2100-01-31");
+    expect(await repo.ensure("default", "U0")).toMatchObject({ accountId: "default:U0", plan: "free", bonusChars: 0 });
+    const a = await repo.grant("default", "U1", "duo", "2099-12-31"); // an old Duo code opens a Starter account
+    expect(a).toMatchObject({ accountId: "default:U1", plan: "starter", planUntil: "2099-12-31", bonusChars: 0 });
+    expect((await repo.grant("default", "U1", "starter", "2100-01-31")).planUntil).toBe("2100-01-31");
+    expect((await repo.grant("default", "U1", "starter", "2099-01-31")).planUntil).toBe("2100-01-31"); // never shortened
+    expect((await repo.ensure("default", "U1")).plan).toBe("starter"); // ensure leaves existing accounts alone
     expect((await repo.addBonus("default:U1", 100_000))?.bonusChars).toBe(100_000);
     expect((await repo.addBonus("default:U1", -200_000))?.bonusChars).toBe(0);
-    expect((await repo.list()).map((x) => x.accountId)).toEqual(["default:U1"]);
+    expect((await repo.list()).map((x) => x.accountId).filter((id) => /^default:U\d$/.test(id)).sort()).toEqual(["default:U0", "default:U1"]);
 
     const groups = new D1GroupRepo(db);
     await groups.register(defaultGroup("Cacct", "default"));

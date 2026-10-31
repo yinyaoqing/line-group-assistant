@@ -16,7 +16,9 @@ describe("legal pages", () => {
 
   it("the terms quote the current prices and warn about relying on translations", () => {
     const html = termsHtml();
-    expect(html).toContain(`NT$${PLANS.pro.price}`);
+    expect(html).toContain(`NT$${PLANS.starter.price}`);
+    expect(html).toContain(`NT$${PLANS.advanced.price}`);
+    expect(html).toContain("不限群組數");
     expect(html).toContain("當面確認");
     expect(html).toContain('href="/privacy"');
   });
